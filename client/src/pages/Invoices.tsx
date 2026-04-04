@@ -1,0 +1,1679 @@
+import { useEffect, useState, useRef, useMemo } from 'react';
+import { Plus, FileText, Download, Printer, CheckCircle, XCircle, Clock, DollarSign, Users, ChevronDown, Upload, X, ArrowRight, Check as CheckIcon, Search, Filter, Settings, Trash2, GraduationCap, Save, Percent, Award, Search as SearchIcon, UserPlus } from 'lucide-react';
+import { useToast } from '../contexts/ToastContext';
+import { PaymentMethod, Fee, FeeStructure, FeeCategory } from '@schofy/shared';
+import { v4 as uuidv4 } from 'uuid';
+import { useCurrency } from '../hooks/useCurrency';
+import { exportToCSV, exportToPDF, exportToExcel } from '../utils/export';
+import { useActiveStudents, useStudents } from '../contexts/StudentsContext';
+import { useAuth } from '../contexts/AuthContext';
+import { dataService } from '../lib/database/DataService';
+import { getFeeStructuresByClass, createFeeStructure, deleteFeeStructure, getCategoryLabel, getCategoryColor } from '../utils/feeStructures';
+import { ClassOption } from '../utils/classroom';
+import DropdownModal from '../components/DropdownModal';
+
+interface Invoice {
+  id: string;
+  studentId: string;
+  studentName: string;
+  description: string;
+  amount: number;
+  paidAmount: number;
+  status: 'paid' | 'partial' | 'pending' | 'overdue';
+  term: string;
+  year: string;
+  dueDate: string;
+  createdAt: string;
+}
+
+interface Bursary {
+  id: string;
+  studentId: string;
+  studentName: string;
+  amount: number;
+  term: string;
+  year: string;
+  createdAt: string;
+}
+
+interface Discount {
+  id: string;
+  classId: string;
+  className: string;
+  amount: number;
+  type: 'fixed' | 'percentage';
+  term: string;
+  year: string;
+  createdAt: string;
+}
+
+export default function Invoices() {
+  const { user } = useAuth();
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [selectedStudents, setSelectedStudents] = useState<string[]>([]);
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterTerm, setFilterTerm] = useState<string>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showStatusFilter, setShowStatusFilter] = useState(false);
+  const [showTermFilter, setShowTermFilter] = useState(false);
+  const { addToast } = useToast();
+  const { formatMoney, currency } = useCurrency();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const statusFilterRef = useRef<HTMLDivElement>(null);
+  const termFilterRef = useRef<HTMLDivElement>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importStep, setImportStep] = useState<'upload' | 'map' | 'preview'>('upload');
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvData, setCsvData] = useState<string[][]>([]);
+  const [fieldMapping, setFieldMapping] = useState<Record<string, string>>({});
+  const [importPreview, setImportPreview] = useState<any[]>([]);
+  
+  const [showStructureModal, setShowStructureModal] = useState(false);
+  const [selectedClassId, setSelectedClassId] = useState<string>('');
+  const [selectedTerm, setSelectedTerm] = useState<string>('1');
+  const [selectedYear, setSelectedYear] = useState<string>(new Date().getFullYear().toString());
+  const [feeStructures, setFeeStructures] = useState<FeeStructure[]>([]);
+  const [selectedStructureIds, setSelectedStructureIds] = useState<string[]>([]);
+  const [showAddStructureForm, setShowAddStructureForm] = useState(false);
+  const [newStructure, setNewStructure] = useState<{ name: string; category: FeeCategory; amount: number; isRequired: boolean; description: string }>({ name: '', category: FeeCategory.TUITION, amount: 0, isRequired: true, description: '' });
+  const [classes, setClasses] = useState<ClassOption[]>([]);
+  const [showBursaryModal, setShowBursaryModal] = useState(false);
+  const [showDiscountModal, setShowDiscountModal] = useState(false);
+  const [bursaries, setBursaries] = useState<Bursary[]>([]);
+  const [discounts, setDiscounts] = useState<Discount[]>([]);
+  const [newBursary, setNewBursary] = useState({ studentId: '', amount: 0 });
+  const [newDiscount, setNewDiscount] = useState({ classId: '', amount: 0, type: 'fixed' as 'fixed' | 'percentage' });
+  const [searchStudent, setSearchStudent] = useState('');
+  const [filterBursaryClass, setFilterBursaryClass] = useState<string>('all');
+  const [fees, setFees] = useState<any[]>([]);
+  const [payments, setPayments] = useState<any[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const students = useActiveStudents();
+  const { students: allStudents } = useStudents();
+
+  useEffect(() => {
+    if (user?.id) {
+      loadFeesAndPayments();
+    }
+  }, [user, refreshKey]);
+
+  async function loadFeesAndPayments() {
+    if (!user?.id) return;
+    try {
+      const [feesData, paymentsData] = await Promise.all([
+        dataService.getAll(user.id, 'fees'),
+        dataService.getAll(user.id, 'payments'),
+      ]);
+      setFees(feesData);
+      setPayments(paymentsData);
+    } catch (error) {
+      console.error('Failed to load fees and payments:', error);
+    }
+  }
+
+  const invoices = useMemo(() => {
+    if (!fees || !payments || !allStudents) return [];
+    
+    const invoiceMap = new Map<string, Invoice>();
+    
+    fees.forEach(fee => {
+      const student = allStudents.find(s => s.id === fee.studentId);
+      const studentPayments = payments.filter(p => p.feeId === fee.id);
+      const paidAmount = studentPayments.reduce((sum, p) => sum + p.amount, 0);
+      const status = paidAmount >= fee.amount ? 'paid' : paidAmount > 0 ? 'partial' : 'pending';
+      
+      invoiceMap.set(fee.id, {
+        id: fee.id,
+        studentId: fee.studentId || '',
+        studentName: student ? `${student.firstName} ${student.lastName}` : 'Unknown',
+        description: fee.description,
+        amount: fee.amount,
+        paidAmount,
+        status,
+        term: fee.term,
+        year: fee.year,
+        dueDate: fee.dueDate || '',
+        createdAt: fee.createdAt,
+      });
+    });
+
+    return Array.from(invoiceMap.values());
+  }, [fees, payments, allStudents]);
+
+  const invoiceExpectedFields = [
+    { key: 'studentName', label: 'Student Name', required: true },
+    { key: 'description', label: 'Description', required: true },
+    { key: 'amount', label: 'Amount', required: true },
+    { key: 'term', label: 'Term', required: false },
+  ];
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+      if (statusFilterRef.current && !statusFilterRef.current.contains(event.target as Node)) {
+        setShowStatusFilter(false);
+      }
+      if (termFilterRef.current && !termFilterRef.current.contains(event.target as Node)) {
+        setShowTermFilter(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (user?.id) {
+      loadClasses();
+      loadBursariesAndDiscounts();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (selectedClassId && user?.id) {
+      loadFeeStructures();
+    }
+  }, [selectedClassId, selectedTerm, selectedYear, user]);
+
+  async function loadBursariesAndDiscounts() {
+    if (!user?.id) return;
+    try {
+      const [bursaryData, discountData] = await Promise.all([
+        dataService.getAll(user.id, 'bursaries'),
+        dataService.getAll(user.id, 'discounts'),
+      ]);
+      setBursaries(bursaryData);
+      setDiscounts(discountData);
+    } catch (error) {
+      console.error('Failed to load bursaries and discounts:', error);
+    }
+  }
+
+  async function loadClasses() {
+    if (!user?.id) return;
+    try {
+      const { getStudentClassOptions } = await import('../utils/classroom');
+      const options = await getStudentClassOptions(user.id);
+      setClasses(options);
+      if (options.length > 0 && !selectedClassId) {
+        setSelectedClassId(options[0].id);
+      }
+    } catch (error) {
+      console.error('Failed to load classes:', error);
+    }
+  }
+
+  async function loadFeeStructures() {
+    if (!user?.id) return;
+    try {
+      const structures = await getFeeStructuresByClass(user.id, selectedClassId, selectedTerm, selectedYear);
+      setFeeStructures(structures);
+      setSelectedStructureIds(structures.filter(s => s.isRequired).map(s => s.id));
+    } catch (error) {
+      console.error('Failed to load fee structures:', error);
+    }
+  }
+
+  async function handleCreateStructure() {
+    if (!newStructure.name || newStructure.amount <= 0 || !user?.id) {
+      addToast('Please enter a name and amount', 'error');
+      return;
+    }
+    try {
+      const structure = await createFeeStructure(
+        user.id,
+        selectedClassId,
+        newStructure.name,
+        newStructure.category,
+        newStructure.amount,
+        selectedTerm,
+        selectedYear,
+        newStructure.isRequired,
+        newStructure.description
+      );
+      setFeeStructures([...feeStructures, structure]);
+      if (structure.isRequired) {
+        setSelectedStructureIds([...selectedStructureIds, structure.id]);
+      }
+      setNewStructure({ name: '', category: FeeCategory.TUITION, amount: 0, isRequired: true, description: '' });
+      setShowAddStructureForm(false);
+      addToast('Fee structure created', 'success');
+    } catch (error) {
+      addToast('Failed to create fee structure', 'error');
+    }
+  }
+
+  async function handleDeleteStructure(id: string) {
+    if (!user?.id) return;
+    try {
+      await deleteFeeStructure(user.id, id);
+      setFeeStructures(feeStructures.filter(s => s.id !== id));
+      setSelectedStructureIds(selectedStructureIds.filter(sid => sid !== id));
+      addToast('Fee structure deleted', 'success');
+    } catch (error) {
+      addToast('Failed to delete fee structure', 'error');
+    }
+  }
+
+  async function handleGenerateInvoices() {
+    if (selectedStructureIds.length === 0) {
+      addToast('Please select at least one fee structure', 'error');
+      return;
+    }
+    try {
+      const studentsInClass = students.filter(s => s.classId === selectedClassId);
+      const classBursaries = bursaries.filter(b => b.term === selectedTerm && b.year === selectedYear);
+      const classDiscounts = discounts.filter(d => d.classId === selectedClassId && d.term === selectedTerm && d.year === selectedYear);
+      
+      const structuresToApply = feeStructures.filter(s => selectedStructureIds.includes(s.id));
+      const baseTotal = structuresToApply.reduce((sum, s) => sum + s.amount, 0);
+      const discount = classDiscounts[0];
+      
+      let invoiceCount = 0;
+      const now = new Date().toISOString();
+      
+      for (const student of studentsInClass) {
+        let invoiceAmount = baseTotal;
+        let description = structuresToApply.map(s => s.name).join(', ');
+        
+        const studentBursary = classBursaries.find(b => b.studentId === student.id);
+        if (studentBursary) {
+          invoiceAmount = Math.max(0, invoiceAmount - studentBursary.amount);
+          description += ` (Bursary: ${formatMoney(studentBursary.amount)})`;
+        }
+        
+        if (discount) {
+          if (discount.type === 'percentage') {
+            const discountAmount = (invoiceAmount * discount.amount) / 100;
+            invoiceAmount = Math.max(0, invoiceAmount - discountAmount);
+            description += ` (Discount: ${discount.amount}%)`;
+          } else {
+            invoiceAmount = Math.max(0, invoiceAmount - discount.amount);
+            description += ` (Discount: ${formatMoney(discount.amount)})`;
+          }
+        }
+        
+        if (invoiceAmount > 0) {
+          await dataService.create(user!.id, 'fees', {
+            id: uuidv4(),
+            studentId: student.id,
+            classId: selectedClassId,
+            description,
+            amount: invoiceAmount,
+            term: selectedTerm,
+            year: selectedYear,
+            createdAt: now,
+          } as any);
+          invoiceCount++;
+        }
+      }
+      
+      addToast(`Created ${invoiceCount} invoices for ${studentsInClass.length} students`, 'success');
+      setShowCreateModal(false);
+      setShowStructureModal(false);
+      loadBursariesAndDiscounts();
+      setRefreshKey(k => k + 1);
+    } catch (error) {
+      console.error('Failed to generate invoices:', error);
+      addToast('Failed to generate invoices', 'error');
+    }
+  }
+
+  async function handleBulkInvoiceWithData(description: string, amount: number, term: string) {
+    if (selectedStudents.length === 0 || !user?.id) {
+      addToast('Please select at least one student', 'error');
+      return;
+    }
+
+    try {
+      const now = new Date().toISOString();
+      const year = new Date().getFullYear().toString();
+      const newFees: Fee[] = [];
+
+      for (const studentId of selectedStudents) {
+        const newFee: Fee = {
+          id: uuidv4(),
+          studentId,
+          description,
+          amount,
+          term,
+          year,
+          createdAt: now,
+        };
+        newFees.push(newFee);
+      }
+
+      for (const newFee of newFees) {
+        await dataService.create(user!.id, 'fees', newFee as any);
+      }
+      addToast(`Created ${newFees.length} invoices`, 'success');
+      setShowCreateModal(false);
+      setSelectedStudents([]);
+      setRefreshKey(k => k + 1);
+    } catch (error) {
+      addToast('Failed to create invoices', 'error');
+    }
+  }
+
+  async function markAsPaid(invoiceId: string) {
+    if (!user?.id) return;
+    const invoice = invoices.find(i => i.id === invoiceId);
+    if (!invoice) return;
+
+    const remainingAmount = invoice.amount - invoice.paidAmount;
+    const paymentAmount = prompt(`Enter payment amount (remaining: ${formatMoney(remainingAmount)}):`, remainingAmount.toString());
+    if (!paymentAmount || isNaN(parseFloat(paymentAmount))) return;
+
+    try {
+      await dataService.create(user.id, 'payments', {
+        id: uuidv4(),
+        feeId: invoiceId,
+        studentId: invoice.studentId,
+        amount: parseFloat(paymentAmount),
+        method: PaymentMethod.CASH,
+        date: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      } as any);
+      addToast('Payment recorded', 'success');
+      setRefreshKey(k => k + 1);
+    } catch (error) {
+      addToast('Failed to record payment', 'error');
+    }
+  }
+
+  function handleExportCSV() {
+    exportToCSV(invoices, 'invoices', [
+      { key: 'studentName' as keyof Invoice, label: 'Student' },
+      { key: 'description' as keyof Invoice, label: 'Description' },
+      { key: 'amount' as keyof Invoice, label: 'Amount' },
+      { key: 'paidAmount' as keyof Invoice, label: 'Paid' },
+      { key: 'status' as keyof Invoice, label: 'Status' },
+      { key: 'term' as keyof Invoice, label: 'Term' },
+    ]);
+    addToast('Exported to CSV', 'success');
+    setShowExportMenu(false);
+  }
+
+  function handleExportPDF() {
+    exportToPDF('Invoices Report', invoices, [
+      { key: 'studentName', label: 'Student' },
+      { key: 'description', label: 'Description' },
+      { key: 'amount', label: 'Amount' },
+      { key: 'paidAmount', label: 'Paid' },
+      { key: 'status', label: 'Status' },
+    ], 'invoices');
+    addToast('Exported to PDF', 'success');
+    setShowExportMenu(false);
+  }
+
+  function handleExportExcel() {
+    exportToExcel(invoices, 'invoices', [
+      { key: 'studentName' as keyof Invoice, label: 'Student' },
+      { key: 'description' as keyof Invoice, label: 'Description' },
+      { key: 'amount' as keyof Invoice, label: 'Amount' },
+      { key: 'paidAmount' as keyof Invoice, label: 'Paid' },
+      { key: 'status' as keyof Invoice, label: 'Status' },
+      { key: 'term' as keyof Invoice, label: 'Term' },
+    ]);
+    addToast('Exported to Excel', 'success');
+    setShowExportMenu(false);
+  }
+
+  function downloadTemplate() {
+    const headers = invoiceExpectedFields.map(f => f.label);
+    const sampleRows = [['John Doe', 'Term 1 Tuition', '50000', '1']];
+    const csv = [headers.join(','), ...sampleRows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'invoices-import-template.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
+    addToast('Template downloaded', 'success');
+  }
+
+  function closeImportModal() {
+    setShowImportModal(false);
+    setImportStep('upload');
+    setCsvHeaders([]);
+    setCsvData([]);
+    setFieldMapping({});
+    setImportPreview([]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  function parseCSVLine(line: string): string[] {
+    const result: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') inQuotes = !inQuotes;
+      else if (char === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+      else current += char;
+    }
+    result.push(current.trim());
+    return result;
+  }
+
+  async function handleFileSelect(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const lines = text.split('\n').filter(line => line.trim());
+      if (lines.length < 2) { addToast('CSV must have headers and at least one data row', 'error'); return; }
+      const headers = parseCSVLine(lines[0]);
+      const data = lines.slice(1).map(line => parseCSVLine(line));
+      setCsvHeaders(headers);
+      setCsvData(data);
+      const autoMapping: Record<string, string> = {};
+      invoiceExpectedFields.forEach(field => {
+        const matchingHeader = headers.find(h => h.toLowerCase() === field.label.toLowerCase() || h.toLowerCase().includes(field.key.toLowerCase()));
+        if (matchingHeader) autoMapping[field.key] = matchingHeader;
+      });
+      setFieldMapping(autoMapping);
+      setImportStep('map');
+      setShowImportModal(true);
+    } catch (error) { addToast('Failed to read CSV file', 'error'); }
+    event.target.value = '';
+  }
+
+  function processMapping() {
+    const mappedData: any[] = [];
+    for (const row of csvData) {
+      const record: any = {};
+      invoiceExpectedFields.forEach(field => {
+        const csvHeader = fieldMapping[field.key];
+        if (csvHeader) {
+          const headerIndex = csvHeaders.indexOf(csvHeader);
+          if (headerIndex !== -1 && row[headerIndex]) {
+            record[field.key] = row[headerIndex];
+          }
+        }
+      });
+      if (record.studentName && record.amount) mappedData.push(record);
+    }
+    setImportPreview(mappedData);
+    setImportStep('preview');
+  }
+
+  async function executeImport() {
+    if (importPreview.length === 0 || !user?.id) { addToast('No valid invoices to import', 'error'); return; }
+    try {
+      const now = new Date().toISOString();
+      const year = new Date().getFullYear().toString();
+      let successCount = 0;
+
+      for (const data of importPreview) {
+        const student = students.find(s => `${s.firstName} ${s.lastName}` === data.studentName);
+        if (!student) continue;
+        const fee: Fee = {
+          id: uuidv4(),
+          studentId: student.id,
+          description: data.description,
+          amount: parseFloat(data.amount),
+          term: data.term || '1',
+          year,
+          createdAt: now,
+        };
+        await dataService.create(user!.id, 'fees', fee as any);
+        successCount++;
+      }
+      addToast(`Successfully imported ${successCount} invoices`, 'success');
+      closeImportModal();
+      setRefreshKey(k => k + 1);
+    } catch (error) { addToast('Failed to import invoices', 'error'); }
+  }
+
+  const filteredInvoices = invoices.filter(inv => {
+    if (filterStatus !== 'all' && inv.status !== filterStatus) return false;
+    if (filterTerm !== 'all' && inv.term !== filterTerm) return false;
+    if (searchTerm) {
+      const search = searchTerm.toLowerCase();
+      if (!inv.studentName.toLowerCase().includes(search) && 
+          !inv.description.toLowerCase().includes(search)) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  const stats = {
+    total: invoices.reduce((sum, i) => sum + i.amount, 0),
+    collected: invoices.reduce((sum, i) => sum + i.paidAmount, 0),
+    pending: invoices.reduce((sum, i) => sum + (i.amount - i.paidAmount), 0),
+    count: invoices.length,
+    bursary: bursaries.reduce((sum, b) => sum + b.amount, 0),
+    discount: discounts.reduce((sum, d) => d.type === 'percentage' ? sum : sum + d.amount, 0),
+  };
+
+  const statusConfig = {
+    paid: { icon: CheckCircle, color: 'text-emerald-600', bg: 'bg-emerald-100 dark:bg-emerald-900/30' },
+    partial: { icon: Clock, color: 'text-amber-600', bg: 'bg-amber-100 dark:bg-amber-900/30' },
+    pending: { icon: XCircle, color: 'text-red-600', bg: 'bg-red-100 dark:bg-red-900/30' },
+    overdue: { icon: XCircle, color: 'text-red-600', bg: 'bg-red-100 dark:bg-red-900/30' },
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-white">
+            Student Invoices
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">Manage and track all student invoices</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <div className="relative" ref={exportMenuRef}>
+            <button 
+              onClick={() => setShowExportMenu(!showExportMenu)} 
+              className="btn btn-secondary"
+              title="Export"
+            >
+              <Download size={16} />
+              <span className="hidden sm:inline">Export</span>
+              <ChevronDown size={14} className={`transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
+            </button>
+            {showExportMenu && (
+              <div className="absolute right-0 mt-2 w-40 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-50 overflow-hidden">
+                <button
+                  onClick={handleExportPDF}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                >
+                  <Printer size={14} />
+                  Export PDF
+                </button>
+                <button
+                  onClick={handleExportCSV}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                >
+                  <Download size={14} />
+                  Export CSV
+                </button>
+                <button
+                  onClick={handleExportExcel}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                >
+                  <FileText size={14} />
+                  Export Excel
+                </button>
+              </div>
+            )}
+          </div>
+          <button onClick={() => { setShowImportModal(true); fileInputRef.current?.click(); }} className="btn btn-secondary">
+            <Upload size={16} />
+            <span className="hidden sm:inline">Import</span>
+          </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileSelect}
+            accept=".csv"
+            className="hidden"
+          />
+          <button onClick={() => setShowStructureModal(true)} className="btn btn-secondary">
+            <Settings size={16} />
+            <span className="hidden sm:inline">Fee Structures</span>
+          </button>
+          <button onClick={() => setShowBursaryModal(true)} className="btn btn-secondary">
+            <Award size={16} />
+            <span className="hidden sm:inline">Bursary</span>
+          </button>
+          <button onClick={() => setShowDiscountModal(true)} className="btn btn-secondary">
+            <Percent size={16} />
+            <span className="hidden sm:inline">Discount</span>
+          </button>
+          <button onClick={() => setShowCreateModal(true)} className="btn btn-primary shadow-lg shadow-primary-500/25">
+            <Plus size={18} /> Bulk Invoice
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="card-solid-indigo p-5">
+          <div className="flex items-center gap-4">
+            <div className="stat-icon stat-icon-violet text-white">
+              <FileText size={24} />
+            </div>
+            <div>
+              <p className="text-sm text-white/80">Total Invoiced</p>
+              <p className="text-2xl font-bold text-white">
+                {formatMoney(stats.total)}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="card-solid-emerald p-5">
+          <div className="flex items-center gap-4">
+            <div className="stat-icon stat-icon-green text-white">
+              <DollarSign size={24} />
+            </div>
+            <div>
+              <p className="text-sm text-white/80">Collected</p>
+              <p className="text-2xl font-bold text-white">
+                {formatMoney(stats.collected)}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="card-solid-rose p-5">
+          <div className="flex items-center gap-4">
+            <div className="stat-icon stat-icon-red text-white">
+              <Clock size={24} />
+            </div>
+            <div>
+              <p className="text-sm text-white/80">Pending</p>
+              <p className="text-2xl font-bold text-white">
+                {formatMoney(stats.pending)}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="card-solid-amber p-5">
+          <div className="flex items-center gap-4">
+            <div className="stat-icon text-white" style={{background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'}}>
+              <Award size={24} />
+            </div>
+            <div>
+              <p className="text-sm text-white/80">Bursary</p>
+              <p className="text-2xl font-bold text-white">
+                {formatMoney(stats.bursary)}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="card-solid-cyan p-5">
+          <div className="flex items-center gap-4">
+            <div className="stat-icon stat-icon-blue text-white">
+              <Percent size={24} />
+            </div>
+            <div>
+              <p className="text-sm text-white/80">Discount</p>
+              <p className="text-2xl font-bold text-white">
+                {formatMoney(stats.discount)}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+            <div className="relative flex-1 w-full">
+              <Search size={18} className="search-input-icon" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                placeholder="Search invoices by student or description..."
+                className="search-input"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowStatusFilter(true)}
+                className={`btn btn-secondary flex items-center gap-2 ${filterStatus !== 'all' ? 'bg-primary-50 dark:bg-primary-900/20 border-primary-300 dark:border-primary-700' : ''}`}
+              >
+                <Filter size={16} />
+                <span className="hidden sm:inline">
+                  {filterStatus === 'all' ? 'All Status' :
+                   filterStatus === 'paid' ? 'Paid' :
+                   filterStatus === 'partial' ? 'Partial' : 'Pending'}
+                </span>
+                <ChevronDown size={14} />
+              </button>
+              <DropdownModal
+                isOpen={showStatusFilter}
+                onClose={() => setShowStatusFilter(false)}
+                title="Filter by Status"
+                icon={<Filter size={20} />}
+              >
+                <div className="p-2 space-y-1">
+                  <button
+                    onClick={() => { setFilterStatus('all'); setShowStatusFilter(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                      filterStatus === 'all' ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <CheckCircle size={18} />
+                    <span className="font-medium">All Status</span>
+                    {filterStatus === 'all' && <CheckIcon size={16} className="ml-auto" />}
+                  </button>
+                  <button
+                    onClick={() => { setFilterStatus('paid'); setShowStatusFilter(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                      filterStatus === 'paid' ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <CheckCircle size={18} className="text-emerald-500" />
+                    <span className="font-medium">Paid</span>
+                    {filterStatus === 'paid' && <CheckIcon size={16} className="ml-auto" />}
+                  </button>
+                  <button
+                    onClick={() => { setFilterStatus('partial'); setShowStatusFilter(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                      filterStatus === 'partial' ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <Clock size={18} className="text-amber-500" />
+                    <span className="font-medium">Partial</span>
+                    {filterStatus === 'partial' && <CheckIcon size={16} className="ml-auto" />}
+                  </button>
+                  <button
+                    onClick={() => { setFilterStatus('pending'); setShowStatusFilter(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                      filterStatus === 'pending' ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <XCircle size={18} className="text-red-500" />
+                    <span className="font-medium">Pending</span>
+                    {filterStatus === 'pending' && <CheckIcon size={16} className="ml-auto" />}
+                  </button>
+                </div>
+              </DropdownModal>
+
+              <button
+                onClick={() => setShowTermFilter(true)}
+                className={`btn btn-secondary flex items-center gap-2 ${filterTerm !== 'all' ? 'bg-primary-50 dark:bg-primary-900/20 border-primary-300 dark:border-primary-700' : ''}`}
+              >
+                <span className="hidden sm:inline">
+                  {filterTerm === 'all' ? 'All Terms' : `Term ${filterTerm}`}
+                </span>
+                <span className="sm:hidden">Terms</span>
+                <ChevronDown size={14} />
+              </button>
+              <DropdownModal
+                isOpen={showTermFilter}
+                onClose={() => setShowTermFilter(false)}
+                title="Filter by Term"
+                icon={<Filter size={20} />}
+              >
+                <div className="p-2 space-y-1">
+                  <button
+                    onClick={() => { setFilterTerm('all'); setShowTermFilter(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                      filterTerm === 'all' ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <span className="font-medium">All Terms</span>
+                    {filterTerm === 'all' && <CheckIcon size={16} className="ml-auto" />}
+                  </button>
+                  <button
+                    onClick={() => { setFilterTerm('1'); setShowTermFilter(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                      filterTerm === '1' ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <span className="font-medium">Term 1</span>
+                    {filterTerm === '1' && <CheckIcon size={16} className="ml-auto" />}
+                  </button>
+                  <button
+                    onClick={() => { setFilterTerm('2'); setShowTermFilter(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                      filterTerm === '2' ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <span className="font-medium">Term 2</span>
+                    {filterTerm === '2' && <CheckIcon size={16} className="ml-auto" />}
+                  </button>
+                  <button
+                    onClick={() => { setFilterTerm('3'); setShowTermFilter(false); }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                      filterTerm === '3' ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <span className="font-medium">Term 3</span>
+                    {filterTerm === '3' && <CheckIcon size={16} className="ml-auto" />}
+                  </button>
+                </div>
+              </DropdownModal>
+            </div>
+          </div>
+        </div>
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Description</th>
+                <th>Amount</th>
+                <th>Paid</th>
+                <th>Balance</th>
+                <th>Status</th>
+                <th>Term</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!fees || !payments || !allStudents ? (
+                <tr>
+                  <td colSpan={8} className="text-center py-12">
+                    <div className="animate-spin rounded-full h-10 w-10 border-4 border-primary-200 border-t-primary-500 mx-auto"></div>
+                  </td>
+                </tr>
+              ) : filteredInvoices.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="text-center py-12">
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="w-16 h-16 rounded-full bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center">
+                        <FileText size={32} className="text-violet-400" />
+                      </div>
+                      <p className="text-slate-500 font-medium">No invoices found</p>
+                      <button onClick={() => setShowCreateModal(true)} className="text-primary-500 hover:text-primary-600 text-sm">
+                        Create bulk invoice
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ) : filteredInvoices.map(invoice => {
+                const StatusIcon = statusConfig[invoice.status].icon;
+                return (
+                  <tr key={invoice.id}>
+                    <td className="font-medium">{invoice.studentName}</td>
+                    <td>{invoice.description}</td>
+                    <td className="font-semibold">{formatMoney(invoice.amount)}</td>
+                    <td className="text-emerald-600 font-semibold">{formatMoney(invoice.paidAmount)}</td>
+                    <td className={invoice.amount - invoice.paidAmount > 0 ? 'text-red-600 font-semibold' : ''}>
+                      {formatMoney(invoice.amount - invoice.paidAmount)}
+                    </td>
+                    <td>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${statusConfig[invoice.status].bg} ${statusConfig[invoice.status].color}`}>
+                        <StatusIcon size={12} />
+                        {invoice.status}
+                      </span>
+                    </td>
+                    <td><span className="badge badge-info">Term {invoice.term}</span></td>
+                    <td>
+                      {invoice.status !== 'paid' && (
+                        <button
+                          onClick={() => markAsPaid(invoice.id)}
+                          className="btn btn-secondary text-sm py-1.5"
+                        >
+                          <DollarSign size={14} /> Record
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-backdrop-in">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden animate-modal-in border border-slate-200 dark:border-slate-700">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-700">
+              <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                <FileText size={24} className="text-violet-500" />
+                Create Bulk Invoice
+              </h2>
+              <p className="text-sm text-slate-500 mt-1">Invoice multiple students at once</p>
+            </div>
+            <div className="p-6 max-h-[60vh] overflow-y-auto">
+              <div className="space-y-4">
+                <div>
+                  <label className="form-label">Select Students ({selectedStudents.length} selected)</label>
+                  <div className="border border-slate-200 dark:border-slate-600 rounded-xl max-h-64 overflow-y-auto">
+                    <div className="p-2 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-700/50 sticky top-0">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedStudents.length === students.length}
+                          onChange={e => setSelectedStudents(e.target.checked ? students.map(s => s.id) : [])}
+                          className="w-4 h-4 rounded border-slate-300"
+                        />
+                        <span className="font-medium text-sm">Select All Students</span>
+                      </label>
+                    </div>
+                    {students.map(student => (
+                      <label key={student.id} className="flex items-center gap-3 p-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer border-b border-slate-100 dark:border-slate-700 last:border-0">
+                        <input
+                          type="checkbox"
+                          checked={selectedStudents.includes(student.id)}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              setSelectedStudents([...selectedStudents, student.id]);
+                            } else {
+                              setSelectedStudents(selectedStudents.filter(id => id !== student.id));
+                            }
+                          }}
+                          className="w-4 h-4 rounded border-slate-300"
+                        />
+                        <div className="flex-1">
+                          <p className="font-medium text-sm">{student.firstName} {student.lastName}</p>
+                          <p className="text-xs text-slate-500">{student.admissionNo}</p>
+                        </div>
+                      </label>
+                    ))}
+                    {students.length === 0 && (
+                      <div className="p-6 text-center text-slate-500">
+                        <Users size={32} className="mx-auto mb-2 opacity-50" />
+                        <p>No active students found</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <label className="form-label">Description</label>
+                    <input
+                      id="bulk-desc"
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g., Term 1 Tuition Fee"
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label">Amount per Student ({currency.symbol})</label>
+                    <input
+                      id="bulk-amount"
+                      type="number"
+                      className="form-input"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label">Term</label>
+                    <select id="bulk-term" className="form-input">
+                      <option value="1">Term 1</option>
+                      <option value="2">Term 2</option>
+                      <option value="3">Term 3</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="p-6 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-3">
+              <button onClick={() => { setShowCreateModal(false); setSelectedStudents([]); }} className="btn btn-secondary">
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const desc = (document.getElementById('bulk-desc') as HTMLInputElement).value;
+                  const amount = parseFloat((document.getElementById('bulk-amount') as HTMLInputElement).value);
+                  const term = (document.getElementById('bulk-term') as HTMLSelectElement).value;
+                  
+                  if (!desc || isNaN(amount) || amount <= 0) {
+                    addToast('Please fill all required fields', 'error');
+                    return;
+                  }
+
+                  handleBulkInvoiceWithData(desc, amount, term);
+                }}
+                className="btn btn-primary"
+              >
+                <Plus size={18} /> Create Invoices
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showImportModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-backdrop-in" onClick={(e) => { if (e.target === e.currentTarget) closeImportModal(); }}>
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl w-full max-w-md animate-modal-in border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700" style={{ backgroundColor: 'var(--primary-color)' }}>
+              <div className="flex items-center gap-2">
+                <Upload size={18} className="text-white" />
+                <h2 className="font-bold text-white">Import Invoices</h2>
+              </div>
+              <button onClick={closeImportModal} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+                <X size={18} className="text-white" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto max-h-[calc(85vh-56px)]">
+              {importStep === 'upload' && (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 mb-4">
+                    <button onClick={downloadTemplate} className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 rounded-lg transition-colors text-sm font-medium">
+                      <Download size={14} />
+                      Download Template
+                    </button>
+                  </div>
+
+                  <div className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-6 hover:border-indigo-400 dark:hover:border-indigo-500 transition-colors cursor-pointer text-center"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload size={28} className="mx-auto text-slate-400 mb-2" />
+                    <p className="text-sm text-slate-600 dark:text-slate-300 font-medium">Click to upload CSV file</p>
+                    <p className="text-xs text-slate-400 mt-1">or drag and drop</p>
+                  </div>
+
+                  <div className="bg-slate-50 dark:bg-slate-700/50 rounded-lg p-3">
+                    <h4 className="font-medium text-slate-700 dark:text-slate-200 mb-2 text-sm">Expected Fields:</h4>
+                    <div className="grid grid-cols-2 gap-1.5 text-xs">
+                      {invoiceExpectedFields.map(field => (
+                        <div key={field.key} className="flex items-center gap-1.5">
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${field.required ? 'bg-red-500' : 'bg-slate-400'}`} />
+                          <span className="text-slate-600 dark:text-slate-300 truncate">{field.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {importStep === 'map' && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                    <span className="px-1.5 py-0.5 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-300 rounded">1</span>
+                    <ArrowRight size={12} />
+                    <span className="px-1.5 py-0.5 bg-indigo-600 text-white rounded font-medium">2 Map</span>
+                    <ArrowRight size={12} />
+                    <span className="px-1.5 py-0.5 bg-slate-200 dark:bg-slate-700 text-slate-500 rounded">3</span>
+                  </div>
+
+                  <div className="max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+                    <table className="w-full text-xs">
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                        {invoiceExpectedFields.filter(f => f.required).map(field => (
+                          <tr key={field.key}>
+                            <td className="px-3 py-2 text-slate-700 dark:text-slate-200 font-medium whitespace-nowrap">
+                              {field.label}*
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <select
+                                value={fieldMapping[field.key] || ''}
+                                onChange={(e) => setFieldMapping(prev => ({ ...prev, [field.key]: e.target.value }))}
+                                className="w-full form-input py-1 px-2 text-xs"
+                              >
+                                <option value="">-- Skip --</option>
+                                {csvHeaders.map(header => (
+                                  <option key={header} value={header}>{header}</option>
+                                ))}
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button onClick={closeImportModal} className="btn btn-secondary py-1.5 px-3 text-sm">Cancel</button>
+                    <button onClick={processMapping} className="btn btn-primary py-1.5 px-3 text-sm flex items-center gap-1">
+                      Preview <ArrowRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {importStep === 'preview' && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                    <span className="px-1.5 py-0.5 bg-green-600 text-white rounded flex items-center gap-1"><CheckIcon size={10} /> 1</span>
+                    <ArrowRight size={12} />
+                    <span className="px-1.5 py-0.5 bg-green-600 text-white rounded flex items-center gap-1"><CheckIcon size={10} /> 2</span>
+                    <ArrowRight size={12} />
+                    <span className="px-1.5 py-0.5 bg-indigo-600 text-white rounded font-medium">3</span>
+                  </div>
+
+                  <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-2.5">
+                    <p className="text-sm text-emerald-700 dark:text-emerald-300">
+                      <strong>{importPreview.length}</strong> invoices ready to import
+                    </p>
+                  </div>
+
+                  <div className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-700/50 sticky top-0">
+                        <tr>
+                          <th className="px-2 py-1.5 text-left font-medium text-slate-600 dark:text-slate-300">#</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-slate-600 dark:text-slate-300">Name</th>
+                          <th className="px-2 py-1.5 text-left font-medium text-slate-600 dark:text-slate-300">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                        {importPreview.slice(0, 5).map((record, index) => (
+                          <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                            <td className="px-2 py-1.5 text-slate-500">{index + 1}</td>
+                            <td className="px-2 py-1.5">{record.studentName || '-'}</td>
+                            <td className="px-2 py-1.5">{record.amount || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {importPreview.length > 5 && (
+                      <div className="p-2 text-center text-xs text-slate-500 bg-slate-50 dark:bg-slate-700/50">
+                        ... and {importPreview.length - 5} more
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex justify-between pt-2">
+                    <button onClick={() => setImportStep('map')} className="btn btn-secondary py-1.5 px-3 text-sm">Back</button>
+                    <button onClick={executeImport} className="btn btn-primary py-1.5 px-3 text-sm flex items-center gap-1">
+                      <CheckIcon size={14} /> Import {importPreview.length}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showStructureModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden animate-modal-in border border-slate-200 dark:border-slate-700">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  <GraduationCap size={24} className="text-indigo-500" />
+                  Fee Structures by Grade
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">Set up tuition and fees for each class</p>
+              </div>
+              <button onClick={() => setShowStructureModal(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-5 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <div className="flex flex-wrap gap-4 items-end">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="form-label">Class / Grade</label>
+                  <select 
+                    value={selectedClassId} 
+                    onChange={(e) => setSelectedClassId(e.target.value)}
+                    className="form-input"
+                  >
+                    {classes.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label">Term</label>
+                  <select 
+                    value={selectedTerm} 
+                    onChange={(e) => setSelectedTerm(e.target.value)}
+                    className="form-input w-32"
+                  >
+                    <option value="1">Term 1</option>
+                    <option value="2">Term 2</option>
+                    <option value="3">Term 3</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label">Year</label>
+                  <select 
+                    value={selectedYear} 
+                    onChange={(e) => setSelectedYear(e.target.value)}
+                    className="form-input w-28"
+                  >
+                    <option value={new Date().getFullYear().toString()}>{new Date().getFullYear()}</option>
+                    <option value={(new Date().getFullYear() + 1).toString()}>{new Date().getFullYear() + 1}</option>
+                  </select>
+                </div>
+                <button 
+                  onClick={() => setShowAddStructureForm(true)}
+                  className="btn btn-primary"
+                >
+                  <Plus size={16} /> Add Fee
+                </button>
+              </div>
+            </div>
+
+            {showAddStructureForm && (
+              <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-emerald-50 dark:bg-emerald-900/20">
+                <h4 className="font-medium text-emerald-700 dark:text-emerald-300 mb-3">Add New Fee Structure</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div>
+                    <label className="form-label text-xs">Name *</label>
+                    <input
+                      type="text"
+                      value={newStructure.name}
+                      onChange={(e) => setNewStructure({...newStructure, name: e.target.value})}
+                      className="form-input"
+                      placeholder="e.g., Tuition Fee"
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label text-xs">Category</label>
+                    <select
+                      value={newStructure.category}
+                      onChange={(e) => setNewStructure({...newStructure, category: e.target.value as FeeCategory})}
+                      className="form-input"
+                    >
+                      <option value={FeeCategory.TUITION}>Tuition</option>
+                      <option value={FeeCategory.BOARDING}>Boarding</option>
+                      <option value={FeeCategory.EXAM}>Examination</option>
+                      <option value={FeeCategory.REGISTRATION}>Registration</option>
+                      <option value={FeeCategory.UNIFORM}>Uniform</option>
+                      <option value={FeeCategory.BOOKS}>Books</option>
+                      <option value={FeeCategory.TRANSPORT}>Transport</option>
+                      <option value={FeeCategory.ACTIVITY}>Activity</option>
+                      <option value={FeeCategory.OTHER}>Other</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="form-label text-xs">Amount ({currency.symbol}) *</label>
+                    <input
+                      type="number"
+                      value={newStructure.amount || ''}
+                      onChange={(e) => setNewStructure({...newStructure, amount: parseFloat(e.target.value) || 0})}
+                      className="form-input"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="flex items-end gap-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newStructure.isRequired}
+                        onChange={(e) => setNewStructure({...newStructure, isRequired: e.target.checked})}
+                        className="w-4 h-4 rounded border-slate-300"
+                      />
+                      <span className="text-sm">Required</span>
+                    </label>
+                    <button onClick={handleCreateStructure} className="btn btn-primary flex-1">
+                      <Save size={16} /> Save
+                    </button>
+                    <button onClick={() => { setShowAddStructureForm(false); setNewStructure({ name: '', category: FeeCategory.TUITION, amount: 0, isRequired: true, description: '' }); }} className="btn btn-secondary">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="p-5 max-h-[50vh] overflow-y-auto">
+              {feeStructures.length === 0 ? (
+                <div className="text-center py-12">
+                  <GraduationCap size={48} className="mx-auto text-slate-300 dark:text-slate-600 mb-3" />
+                  <p className="text-slate-500 font-medium">No fee structures for this class</p>
+                  <p className="text-sm text-slate-400 mt-1">Click "Add Fee" to create fee structures</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="font-medium text-slate-700 dark:text-slate-300">
+                      {feeStructures.length} fee structure{feeStructures.length !== 1 ? 's' : ''}
+                    </p>
+                    <p className="text-sm text-slate-500">
+                      Total per student: <span className="font-bold text-primary-600">{formatMoney(feeStructures.reduce((sum, s) => sum + s.amount, 0))}</span>
+                    </p>
+                  </div>
+                  {feeStructures.map(structure => (
+                    <div 
+                      key={structure.id}
+                      className={`flex items-center justify-between p-3 rounded-xl border-2 transition-all ${
+                        selectedStructureIds.includes(structure.id)
+                          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
+                          : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedStructureIds.includes(structure.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedStructureIds([...selectedStructureIds, structure.id]);
+                            } else {
+                              setSelectedStructureIds(selectedStructureIds.filter(id => id !== structure.id));
+                            }
+                          }}
+                          className="w-5 h-5 rounded border-slate-300"
+                        />
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium text-slate-800 dark:text-white">{structure.name}</p>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getCategoryColor(structure.category)}`}>
+                              {getCategoryLabel(structure.category)}
+                            </span>
+                            {structure.isRequired && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300">
+                                Required
+                              </span>
+                            )}
+                          </div>
+                          {structure.description && (
+                            <p className="text-xs text-slate-500 mt-0.5">{structure.description}</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className="font-bold text-lg text-slate-800 dark:text-white">
+                          {formatMoney(structure.amount)}
+                        </span>
+                        <button
+                          onClick={() => handleDeleteStructure(structure.id)}
+                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-5 border-t border-slate-200 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+              <div>
+                <p className="text-sm text-slate-500">
+                  {selectedStructureIds.length} of {feeStructures.length} selected
+                </p>
+                {selectedStructureIds.length > 0 && (
+                  <p className="font-medium text-primary-600">
+                    Total: {formatMoney(feeStructures.filter(s => selectedStructureIds.includes(s.id)).reduce((sum, s) => sum + s.amount, 0))} per student
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => setShowStructureModal(false)} className="btn btn-secondary">
+                  Close
+                </button>
+                <button 
+                  onClick={handleGenerateInvoices}
+                  disabled={selectedStructureIds.length === 0}
+                  className="btn btn-primary disabled:opacity-50"
+                >
+                  <FileText size={16} /> Generate Invoices for Class
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBursaryModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden animate-modal-in border border-slate-200 dark:border-slate-700">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  <Award size={24} className="text-amber-500" />
+                  Bursary Management
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">Manage student bursaries/scholarships</p>
+              </div>
+              <button onClick={() => setShowBursaryModal(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-5 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <div className="flex gap-4 items-end">
+                <div className="flex-1">
+                  <label className="form-label">Search Student</label>
+                  <div className="relative">
+                    <SearchIcon size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={searchStudent}
+                      onChange={(e) => setSearchStudent(e.target.value)}
+                      className="form-input pl-10"
+                      placeholder="Search by name or ID..."
+                    />
+                  </div>
+                </div>
+                <div className="w-40">
+                  <label className="form-label">Class Filter</label>
+                  <select 
+                    value={filterBursaryClass} 
+                    onChange={(e) => setFilterBursaryClass(e.target.value)}
+                    className="form-input"
+                  >
+                    <option value="all">All Classes</option>
+                    {classes.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              
+              <div className="mt-4 flex gap-4 items-end">
+                <div className="flex-1">
+                  <label className="form-label">Select Student</label>
+                  <select 
+                    value={newBursary.studentId} 
+                    onChange={(e) => setNewBursary({...newBursary, studentId: e.target.value})}
+                    className="form-input"
+                  >
+                    <option value="">Select a student...</option>
+                    {students
+                      .filter(s => {
+                        if (filterBursaryClass !== 'all' && s.classId !== filterBursaryClass) return false;
+                        if (searchStudent) {
+                          const search = searchStudent.toLowerCase();
+                          return s.firstName.toLowerCase().includes(search) || 
+                                 s.lastName.toLowerCase().includes(search) ||
+                                 (s.studentId || s.admissionNo || '').toLowerCase().includes(search);
+                        }
+                        return true;
+                      })
+                      .slice(0, 20)
+                      .map(s => (
+                        <option key={s.id} value={s.id}>{s.firstName} {s.lastName} - {s.studentId || s.admissionNo}</option>
+                      ))
+                    }
+                  </select>
+                </div>
+                <div className="w-40">
+                  <label className="form-label">Amount ({currency.symbol})</label>
+                  <input
+                    type="number"
+                    value={newBursary.amount || ''}
+                    onChange={(e) => setNewBursary({...newBursary, amount: parseFloat(e.target.value) || 0})}
+                    className="form-input"
+                    placeholder="0.00"
+                  />
+                </div>
+                <button 
+                  onClick={async () => {
+                    if (!newBursary.studentId || newBursary.amount <= 0) {
+                      addToast('Please select a student and enter amount', 'error');
+                      return;
+                    }
+                    const student = students.find(s => s.id === newBursary.studentId);
+                    const bursary: Bursary = {
+                      id: uuidv4(),
+                      studentId: newBursary.studentId,
+                      studentName: student ? `${student.firstName} ${student.lastName}` : 'Unknown',
+                      amount: newBursary.amount,
+                      term: selectedTerm,
+                      year: selectedYear,
+                      createdAt: new Date().toISOString(),
+                    };
+                    await dataService.create(user!.id, 'bursaries', bursary as any);
+                    setBursaries([...bursaries, bursary]);
+                    setNewBursary({ studentId: '', amount: 0 });
+                    addToast('Bursary added successfully', 'success');
+                  }}
+                  className="btn btn-primary"
+                >
+                  <UserPlus size={16} /> Add
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 max-h-[40vh] overflow-y-auto">
+              {bursaries.length === 0 ? (
+                <div className="text-center py-8">
+                  <Award size={48} className="mx-auto text-slate-300 dark:text-slate-600 mb-3" />
+                  <p className="text-slate-500 font-medium">No bursaries added</p>
+                  <p className="text-sm text-slate-400 mt-1">Add bursaries to reduce invoiced amounts</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {bursaries.map(b => (
+                    <div key={b.id} className="flex items-center justify-between p-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                      <div>
+                        <p className="font-medium text-slate-800 dark:text-white">{b.studentName}</p>
+                        <p className="text-xs text-slate-500">Term {b.term}, {b.year}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold text-amber-600">{formatMoney(b.amount)}</span>
+                        <button
+                          onClick={async () => {
+                            await dataService.delete(user!.id, 'bursaries', b.id);
+                            setBursaries(bursaries.filter(br => br.id !== b.id));
+                            addToast('Bursary removed', 'success');
+                          }}
+                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-5 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <div className="flex justify-between items-center">
+                <p className="font-medium text-slate-700 dark:text-slate-300">
+                  Total Bursary: <span className="text-amber-600 font-bold">{formatMoney(bursaries.reduce((sum, b) => sum + b.amount, 0))}</span>
+                </p>
+                <button onClick={() => setShowBursaryModal(false)} className="btn btn-secondary">Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDiscountModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden animate-modal-in border border-slate-200 dark:border-slate-700">
+            <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  <Percent size={24} className="text-cyan-500" />
+                  Class Discount Management
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">Set percentage or fixed amount discounts per class</p>
+              </div>
+              <button onClick={() => setShowDiscountModal(false)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-5 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <div className="flex gap-4 items-end">
+                <div className="flex-1">
+                  <label className="form-label">Class</label>
+                  <select 
+                    value={newDiscount.classId} 
+                    onChange={(e) => setNewDiscount({...newDiscount, classId: e.target.value})}
+                    className="form-input"
+                  >
+                    <option value="">Select a class...</option>
+                    {classes.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-32">
+                  <label className="form-label">Type</label>
+                  <select 
+                    value={newDiscount.type} 
+                    onChange={(e) => setNewDiscount({...newDiscount, type: e.target.value as 'fixed' | 'percentage'})}
+                    className="form-input"
+                  >
+                    <option value="fixed">Fixed Amount</option>
+                    <option value="percentage">Percentage (%)</option>
+                  </select>
+                </div>
+                <div className="w-32">
+                  <label className="form-label">{newDiscount.type === 'percentage' ? 'Percent' : 'Amount'} ({newDiscount.type === 'percentage' ? '%' : currency.symbol})</label>
+                  <input
+                    type="number"
+                    value={newDiscount.amount || ''}
+                    onChange={(e) => setNewDiscount({...newDiscount, amount: parseFloat(e.target.value) || 0})}
+                    className="form-input"
+                    placeholder={newDiscount.type === 'percentage' ? '10' : '0.00'}
+                    max={newDiscount.type === 'percentage' ? 100 : undefined}
+                  />
+                </div>
+                <button 
+                  onClick={async () => {
+                    if (!newDiscount.classId || newDiscount.amount <= 0) {
+                      addToast('Please select a class and enter amount', 'error');
+                      return;
+                    }
+                    const cls = classes.find(c => c.id === newDiscount.classId);
+                    const discount: Discount = {
+                      id: uuidv4(),
+                      classId: newDiscount.classId,
+                      className: cls ? cls.name : 'Unknown',
+                      amount: newDiscount.amount,
+                      type: newDiscount.type,
+                      term: selectedTerm,
+                      year: selectedYear,
+                      createdAt: new Date().toISOString(),
+                    };
+                    await dataService.create(user!.id, 'discounts', discount as any);
+                    setDiscounts([...discounts, discount]);
+                    setNewDiscount({ classId: '', amount: 0, type: 'fixed' });
+                    addToast('Discount added successfully', 'success');
+                  }}
+                  className="btn btn-primary"
+                >
+                  <Plus size={16} /> Add
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5 max-h-[40vh] overflow-y-auto">
+              {discounts.length === 0 ? (
+                <div className="text-center py-8">
+                  <Percent size={48} className="mx-auto text-slate-300 dark:text-slate-600 mb-3" />
+                  <p className="text-slate-500 font-medium">No discounts added</p>
+                  <p className="text-sm text-slate-400 mt-1">Add discounts to reduce class invoiced amounts</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {discounts.map(d => (
+                    <div key={d.id} className="flex items-center justify-between p-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                      <div>
+                        <p className="font-medium text-slate-800 dark:text-white">{d.className}</p>
+                        <p className="text-xs text-slate-500">Term {d.term}, {d.year}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold text-cyan-600">
+                          {d.type === 'percentage' ? `${d.amount}%` : formatMoney(d.amount)}
+                        </span>
+                        <button
+                          onClick={async () => {
+                            await dataService.delete(user!.id, 'discounts', d.id);
+                            setDiscounts(discounts.filter(disc => disc.id !== d.id));
+                            addToast('Discount removed', 'success');
+                          }}
+                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="p-5 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <div className="flex justify-between items-center">
+                <p className="font-medium text-slate-700 dark:text-slate-300">
+                  Total Discount Value: <span className="text-cyan-600 font-bold">{formatMoney(discounts.reduce((sum, d) => d.type === 'percentage' ? sum : sum + d.amount, 0))}</span>
+                </p>
+                <button onClick={() => setShowDiscountModal(false)} className="btn btn-secondary">Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
