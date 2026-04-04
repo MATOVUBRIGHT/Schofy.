@@ -3,22 +3,68 @@ node_modules
 # Environment variables (contains sensitive credentials)
 .env
 .env.local
+.env.*.local
 .env.production
+.env.production.local
+.env.*.example.local
+
+# API Keys and secrets
+.api-keys
+*.key
+*.pem
+*.p8
+.credentials
+.secrets
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
 
 # Build outputs
 dist
 build
+.next
+out
+
+# Package manager
+pnpm-lock.yaml
+yarn.lock
 
 # Logs
 *.log
+logs
+*.log*
 
 # IDE
 .vscode
+.vscode-test
 .idea
+.DS_Store
+.history
+*.swp
+*.swo
+*~
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
 
 # Supabase
 .supabase
+
+# Development
+.env.test.local
+.env.staging.local
