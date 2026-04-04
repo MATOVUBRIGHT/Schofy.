@@ -1,0 +1,24 @@
+node_modules
+
+# Environment variables (contains sensitive credentials)
+.env
+.env.local
+.env.production
+
+# Build outputs
+dist
+build
+
+# Logs
+*.log
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Supabase
+.supabase
