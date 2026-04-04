@@ -29,29 +29,45 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const [pendingChanges, setPendingChanges] = useState(0);
   const [syncEnabled, setSyncEnabled] = useState(false);
 
+  // Configure sync service with Supabase
   useEffect(() => {
     syncService.disableSync();
     
     if (isSupabaseConfigured && supabase) {
       syncService.configure({ supabaseClient: supabase });
+      console.log('✅ Sync service configured with Supabase');
+    } else {
+      console.warn('⚠️ Supabase not configured - sync disabled');
     }
   }, []);
 
+  // Set user ID when schoolId changes
   useEffect(() => {
     if (schoolId) {
       syncService.setUserId(schoolId);
+      console.log('👤 Sync user ID set to:', schoolId);
     }
   }, [schoolId]);
 
+  // Start/stop real-time sync based on online status and sync enabled state
   useEffect(() => {
     if (isOnline && syncEnabled && user && schoolId) {
+      console.log('🔄 Starting real-time sync - online and enabled');
+      syncService.enableSync();
       syncService.startBackgroundSync();
       loadPendingCount();
     } else {
+      console.log('⏸️ Stopping real-time sync');
+      syncService.disableSync();
       syncService.stopBackgroundSync();
     }
+
+    return () => {
+      syncService.stopBackgroundSync();
+    };
   }, [isOnline, syncEnabled, user, schoolId]);
 
+  // Load pending count periodically
   const loadPendingCount = useCallback(async () => {
     if (!user?.id) return;
     try {
@@ -68,19 +84,26 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   }, [loadPendingCount]);
 
   const syncNow = useCallback(async () => {
-    if (!isOnline || isSyncing || !syncEnabled || !user) return;
+    if (!isOnline || isSyncing || !syncEnabled || !user) {
+      console.log('⚠️ Sync skipped - offline:', !isOnline, 'already syncing:', isSyncing);
+      return;
+    }
 
     setIsSyncing(true);
+    console.log('📤 Manual sync initiated...');
+    
     try {
       await syncService.syncIncremental();
       setLastSyncTime(new Date());
       await loadPendingCount();
+      addToast('Data synced successfully', 'success');
     } catch (error) {
       console.error('Sync failed:', error);
+      addToast('Sync failed - will retry automatically', 'error');
     } finally {
       setIsSyncing(false);
     }
-  }, [isOnline, syncEnabled, user, loadPendingCount]);
+  }, [isOnline, syncEnabled, user, loadPendingCount, isSyncing, addToast]);
 
   const exportBackup = useCallback(async () => {
     if (!user?.id) return;
