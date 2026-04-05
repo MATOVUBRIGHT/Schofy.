@@ -21,22 +21,23 @@ interface TestResult {
   success: boolean;
 }
 
-const config: TestConfig = {
-  baseUrl: 'http://localhost:3333/api',
-  numSchools: 5, // Start with 5 schools, can increase
-  studentsPerSchool: 10,
-  staffPerSchool: 5,
-  classesPerSchool: 3,
-};
+(async () => {
+  const config: TestConfig = {
+    baseUrl: 'http://localhost:3333/api',
+    numSchools: 5, // Start with 5 schools, can increase
+    studentsPerSchool: 10,
+    staffPerSchool: 5,
+    classesPerSchool: 3,
+  };
 
-const timestamp = Date.now();
-const results: TestResult[] = [];
+  const timestamp = Date.now();
+  const results: TestResult[] = [];
 
-async function sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+  async function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
 
-async function makeRequest(method: string, path: string, body?: any, token?: string) {
+  async function makeRequest(method: string, path: string, body?: any, token?: string) {
   const startTime = performance.now();
   try {
     const options: RequestInit = {
@@ -130,7 +131,7 @@ async function testSchoolOperations(schoolNumber: number, token: string, result:
         );
         responseTimes.push(res.responseTime);
       } catch (e) {
-        result.errors.push(`Failed to create class ${i}: ${e.error}`);
+        result.errors.push(`Failed to create class ${i}: ${(e as any).error}`);
       }
       await sleep(50);
     }
@@ -155,7 +156,7 @@ async function testSchoolOperations(schoolNumber: number, token: string, result:
         );
         responseTimes.push(res.responseTime);
       } catch (e) {
-        result.errors.push(`Failed to create student ${i}: ${e.error}`);
+        result.errors.push(`Failed to create student ${i}: ${(e as any).error}`);
       }
       await sleep(50);
     }
@@ -180,7 +181,7 @@ async function testSchoolOperations(schoolNumber: number, token: string, result:
         );
         responseTimes.push(res.responseTime);
       } catch (e) {
-        result.errors.push(`Failed to create staff ${i}: ${e.error}`);
+        result.errors.push(`Failed to create staff ${i}: ${(e as any).error}`);
       }
       await sleep(50);
     }
@@ -199,7 +200,7 @@ async function testSchoolOperations(schoolNumber: number, token: string, result:
         const res = await makeRequest(op.method, op.path, undefined, token);
         responseTimes.push(res.responseTime);
       } catch (e) {
-        result.errors.push(`Failed GET ${op.path}: ${e.error}`);
+        result.errors.push(`Failed GET ${op.path}: ${(e as any).error}`);
       }
       await sleep(100);
     }
@@ -319,4 +320,5 @@ async function runLoadTest() {
 }
 
 // Run the test
-runLoadTest().catch(console.error);
+await runLoadTest();
+})().catch(console.error);

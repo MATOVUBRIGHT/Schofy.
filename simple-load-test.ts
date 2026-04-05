@@ -12,17 +12,18 @@ interface TestResult {
   success: boolean;
 }
 
-const baseUrl = 'http://localhost:3333/api';
-const timestamp = Date.now();
-const numSchools = 1000; // Test with 1000 schools
+(async () => {
+  const baseUrl = 'http://localhost:3333/api';
+  const timestamp = Date.now();
+  const numSchools = 1000; // Test with 1000 schools
 
-const results: TestResult[] = [];
+  const results: TestResult[] = [];
 
-async function sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+  async function sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
 
-async function makeRequest(method: string, path: string, body?: any, token?: string) {
+  async function makeRequest(method: string, path: string, body?: any, token?: string) {
   const startTime = performance.now();
   try {
     const options: RequestInit = {
@@ -172,4 +173,5 @@ async function runTest() {
   console.log('='.repeat(70) + '\n');
 }
 
-runTest().catch(console.error);
+  await runTest();
+})().catch(console.error);
