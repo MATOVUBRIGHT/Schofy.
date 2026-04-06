@@ -685,6 +685,115 @@ textarea.form-input {
   flex-basis: 0;
 }
 
+/* Solid color cards overflow handling */
+.card-solid-indigo,
+.card-solid-emerald,
+.card-solid-rose,
+.card-solid-violet,
+.card-solid-cyan,
+.card-solid-purple,
+.card-solid-red,
+.card-solid-teal,
+.card-solid-yellow,
+.card-solid-slate,
+.card-solid-amber,
+.card-emerald,
+.card-sky,
+.card-violet,
+.card-amber,
+.card-coral-light,
+.card-teal-light,
+.card-violet-light,
+.card-emerald-light,
+.card-sky-light,
+.card-amber-light,
+.card-rose-light,
+.card-indigo-light,
+.card-purple-light,
+.card-cyan-light {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.card-solid-indigo > *,
+.card-solid-emerald > *,
+.card-solid-rose > *,
+.card-solid-violet > *,
+.card-solid-cyan > *,
+.card-solid-purple > *,
+.card-solid-red > *,
+.card-solid-teal > *,
+.card-solid-yellow > *,
+.card-solid-slate > *,
+.card-solid-amber > *,
+.card-emerald > *,
+.card-sky > *,
+.card-violet > *,
+.card-amber > * {
+  min-width: 0;
+}
+
+/* Stat cards overflow handling */
+.stat-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.stat-card > * {
+  min-width: 0;
+}
+
+/* Gradient cards overflow handling */
+.card-gradient {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.card-gradient > * {
+  min-width: 0;
+}
+
+/* Universal text overflow for all card text elements */
+.card *,
+.card-solid-indigo *,
+.card-solid-emerald *,
+.card-solid-rose *,
+.card-solid-violet *,
+.card-solid-cyan *,
+.card-solid-purple *,
+.card-solid-red *,
+.card-solid-teal *,
+.card-solid-yellow *,
+.card-solid-slate *,
+.card-solid-amber *,
+.card-gradient * {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Allow multiline text to wrap but still constrain */
+.card p,
+.card span,
+.card label {
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Headings and titles should always truncate */
+.card h1,
+.card h2,
+.card h3,
+.card h4,
+.card h5,
+.card h6,
+.card-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Solid color cards (no gradients) - Color Hierarchy */
 .card-solid-indigo {
   background-color: #4F46E5;
