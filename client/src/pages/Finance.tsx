@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
-import { Plus, DollarSign, Receipt, FileText, CreditCard, TrendingUp, AlertCircle, Download, ChevronDown, Upload, X, ArrowRight, Check as CheckIcon, Check, Search, Filter, Users, Layers, Trash2, Wand2 } from 'lucide-react';
+import { DollarSign, Receipt, FileText, Users, Layers, Trash2, Wand2, Plus, Download, Upload, X, Check, ChevronDown, Check as CheckIcon, CreditCard, Search, Filter, ArrowRight } from 'lucide-react';
 import { useToast } from '../contexts/ToastContext';
 import { Fee, Payment, PaymentMethod, FeeStructure, FeeCategory } from '@schofy/shared';
 import { v4 as uuidv4 } from 'uuid';
 import { useCurrency } from '../hooks/useCurrency';
-import { exportToCSV, exportToPDF, exportToExcel } from '../utils/export';
+import { exportToPDF, exportToCSV, exportToExcel } from '../utils/export';
 import { useActiveStudents } from '../contexts/StudentsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { dataService } from '../lib/database/DataService';
@@ -13,20 +13,17 @@ import { userDBManager } from '../lib/database/UserDatabaseManager';
 export default function Finance() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'students' | 'invoices' | 'payments' | 'fees'>('students');
-  const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState({ studentId: '', description: '', amount: 0, term: '1', year: new Date().getFullYear().toString() });
   const { addToast } = useToast();
   const { formatMoney, currency } = useCurrency();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [showExportMenu, setShowExportMenu] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importStep, setImportStep] = useState<'upload' | 'map' | 'preview'>('upload');
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvData, setCsvData] = useState<string[][]>([]);
   const [fieldMapping, setFieldMapping] = useState<Record<string, string>>({});
   const [importPreview, setImportPreview] = useState<any[]>([]);
-  const [importType, setImportType] = useState<'invoices' | 'payments'>('invoices');
   const [searchTerm, setSearchTerm] = useState('');
   const [filterTerm, setFilterTerm] = useState('all');
   const [showTermFilter, setShowTermFilter] = useState(false);
@@ -256,13 +253,6 @@ export default function Finance() {
     return colors[category] || colors[FeeCategory.OTHER];
   }
 
-  const invoiceExpectedFields = [
-    { key: 'studentName', label: 'Student Name', required: true },
-    { key: 'description', label: 'Description', required: true },
-    { key: 'amount', label: 'Amount', required: true },
-    { key: 'term', label: 'Term', required: true },
-  ];
-
   const paymentExpectedFields = [
     { key: 'studentName', label: 'Student Name', required: true },
     { key: 'amount', label: 'Amount', required: true },
@@ -282,20 +272,6 @@ export default function Finance() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  async function handleCreateInvoice(e: React.FormEvent) {
-    e.preventDefault();
-    if (!user?.id) return;
-    try {
-      const newFee: Fee = { id: uuidv4(), studentId: formData.studentId, description: formData.description, amount: formData.amount, term: formData.term, year: formData.year, createdAt: new Date().toISOString() };
-      await dataService.create(user.id, 'fees', newFee as any);
-      setShowForm(false);
-      setFormData({ studentId: '', description: '', amount: 0, term: '1', year: new Date().getFullYear().toString() });
-      addToast('Invoice created successfully', 'success');
-    } catch (error) {
-      addToast('Failed to create invoice', 'error');
-    }
-  }
 
   async function handleRecordPayment(feeId: string, studentId: string, _amount: number) {
     if (!user?.id) return;
@@ -423,16 +399,14 @@ export default function Finance() {
   }
 
   function downloadTemplate() {
-    const fields = importType === 'invoices' ? invoiceExpectedFields : paymentExpectedFields;
+    const fields = paymentExpectedFields;
     const headers = fields.map(f => f.label);
-    const sampleRows = importType === 'invoices'
-      ? [['John Doe', 'Term 1 Tuition', '50000', '1']]
-      : [['John Doe', '50000', 'cash', '2024-01-15']];
+    const sampleRows = [['John Doe', '50000', 'cash', '2024-01-15']];
     const csv = [headers.join(','), ...sampleRows.map(r => r.join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `${importType}-import-template.csv`;
+    link.download = `payments-import-template.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
     addToast('Template downloaded', 'success');
@@ -473,7 +447,7 @@ export default function Finance() {
       const data = lines.slice(1).map(line => parseCSVLine(line));
       setCsvHeaders(headers);
       setCsvData(data);
-      const fields = importType === 'invoices' ? invoiceExpectedFields : paymentExpectedFields;
+      const fields = paymentExpectedFields;
       const autoMapping: Record<string, string> = {};
       fields.forEach(field => {
         const matchingHeader = headers.find(h => h.toLowerCase() === field.label.toLowerCase() || h.toLowerCase().includes(field.key.toLowerCase()));
@@ -487,7 +461,7 @@ export default function Finance() {
   }
 
   function processMapping() {
-    const fields = importType === 'invoices' ? invoiceExpectedFields : paymentExpectedFields;
+    const fields = paymentExpectedFields;
     const mappedData: any[] = [];
     for (const row of csvData) {
       const record: any = {};
@@ -500,8 +474,7 @@ export default function Finance() {
           }
         }
       });
-      if ((importType === 'invoices' && record.description && record.amount) ||
-          (importType === 'payments' && record.studentName && record.amount)) {
+      if (record.studentName && record.amount) {
         mappedData.push(record);
       }
     }
@@ -515,40 +488,22 @@ export default function Finance() {
       const now = new Date().toISOString();
       let successCount = 0;
 
-      if (importType === 'invoices') {
-        for (const data of importPreview) {
-          const student = students.find(s => `${s.firstName} ${s.lastName}` === data.studentName);
-          if (!student) continue;
-          const fee: Fee = {
-            id: uuidv4(),
-            studentId: student.id,
-            description: data.description,
-            amount: parseFloat(data.amount),
-            term: data.term || '1',
-            year: new Date().getFullYear().toString(),
-            createdAt: now,
-          };
-          await dataService.create(user.id, 'fees', fee as any);
-          successCount++;
-        }
-      } else {
-        for (const data of importPreview) {
-          const student = students.find(s => `${s.firstName} ${s.lastName}` === data.studentName);
-          if (!student) continue;
-          const payment: Payment = {
-            id: uuidv4(),
-            feeId: '',
-            studentId: student.id,
-            amount: parseFloat(data.amount),
-            method: (data.method as PaymentMethod) || PaymentMethod.CASH,
-            date: data.date || now,
-            createdAt: now,
-          };
-          await dataService.create(user.id, 'payments', payment as any);
-          successCount++;
-        }
+      for (const data of importPreview) {
+        const student = students.find(s => `${s.firstName} ${s.lastName}` === data.studentName);
+        if (!student) continue;
+        const payment: Payment = {
+          id: uuidv4(),
+          feeId: '',
+          studentId: student.id,
+          amount: parseFloat(data.amount),
+          method: (data.method as PaymentMethod) || PaymentMethod.CASH,
+          date: data.date || now,
+          createdAt: now,
+        };
+        await dataService.create(user.id, 'payments', payment as any);
+        successCount++;
       }
-      addToast(`Successfully imported ${successCount} ${importType}`, 'success');
+      addToast(`Successfully imported ${successCount} payments`, 'success');
       closeImportModal();
     } catch (error) { addToast('Failed to import', 'error'); }
   }
@@ -666,7 +621,7 @@ export default function Finance() {
                   </div>
                 )}
               </div>
-              <button onClick={() => { setImportType('invoices'); setShowImportModal(true); fileInputRef.current?.click(); }} className="btn btn-secondary" title="Import">
+              <button onClick={() => { setShowImportModal(true); fileInputRef.current?.click(); }} className="btn btn-secondary" title="Import">
                 <Upload size={16} />
                 <span className="hidden sm:inline">Import</span>
               </button>
@@ -710,7 +665,7 @@ export default function Finance() {
                   </div>
                 )}
               </div>
-              <button onClick={() => { setImportType('payments'); setShowImportModal(true); fileInputRef.current?.click(); }} className="btn btn-secondary" title="Import">
+              <button onClick={() => { setShowImportModal(true); fileInputRef.current?.click(); }} className="btn btn-secondary" title="Import">
                 <Upload size={16} />
                 <span className="hidden sm:inline">Import</span>
               </button>
@@ -723,12 +678,6 @@ export default function Finance() {
             accept=".csv"
             className="hidden"
           />
-          {activeTab === 'invoices' && (
-            <button onClick={() => setShowForm(true)} className="btn btn-primary">
-              <Plus size={16} />
-              Create Invoice
-            </button>
-          )}
         </div>
       </div>
 
@@ -737,7 +686,7 @@ export default function Finance() {
         <div className="card-solid-emerald p-5 rounded-2xl shadow-lg hover:shadow-xl transition-all">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
-              <TrendingUp size={24} className="text-white" />
+              <Receipt size={24} className="text-white" />
             </div>
             <div>
               <p className="text-sm font-medium text-white/80">Collected</p>
@@ -748,7 +697,7 @@ export default function Finance() {
         <div className="card-solid-rose p-5 rounded-2xl shadow-lg hover:shadow-xl transition-all">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
-              <AlertCircle size={24} className="text-white" />
+              <DollarSign size={24} className="text-white" />
             </div>
             <div>
               <p className="text-sm font-medium text-white/80">Pending</p>
@@ -779,55 +728,6 @@ export default function Finance() {
           </div>
         </div>
       </div>
-
-      {/* Invoice Form */}
-      {showForm && (
-        <div className="card border-l-4 border-l-violet-500">
-          <div className="card-header">
-            <h3 className="font-semibold text-violet-600 dark:text-violet-400 flex items-center gap-2">
-              <Plus size={18} />
-              Create New Invoice
-            </h3>
-          </div>
-          <form onSubmit={handleCreateInvoice} className="card-body grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="form-label">Student</label>
-              <select value={formData.studentId} onChange={e => setFormData(prev => ({ ...prev, studentId: e.target.value }))} className="form-input" required>
-                <option value="">Select Student</option>
-                {students.map(s => (
-                  <option key={s.id} value={s.id}>{s.firstName} {s.lastName} ({s.admissionNo})</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="form-label">Description</label>
-              <input value={formData.description} onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))} className="form-input" required placeholder="Term 1 Tuition" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="form-label">Amount ({currency.symbol})</label>
-              <input type="number" value={formData.amount} onChange={e => setFormData(prev => ({ ...prev, amount: parseFloat(e.target.value) }))} className="form-input" required />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="form-label">Term</label>
-                <select value={formData.term} onChange={e => setFormData(prev => ({ ...prev, term: e.target.value }))} className="form-input">
-                  <option value="1">Term 1</option>
-                  <option value="2">Term 2</option>
-                  <option value="3">Term 3</option>
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="form-label">Year</label>
-                <input type="number" value={formData.year} onChange={e => setFormData(prev => ({ ...prev, year: e.target.value }))} className="form-input" />
-              </div>
-            </div>
-            <div className="md:col-span-2 flex gap-2">
-              <button type="submit" className="btn btn-primary">Create Invoice</button>
-              <button type="button" onClick={() => setShowForm(false)} className="btn btn-secondary">Cancel</button>
-            </div>
-          </form>
-        </div>
-      )}
 
       {/* Main Card with Tabs */}
       <div className="card">
@@ -990,9 +890,7 @@ export default function Finance() {
                         <FileText size={24} className="text-violet-400" />
                       </div>
                       <p className="text-slate-500 font-medium">No invoices yet</p>
-                      <button onClick={() => setShowForm(true)} className="text-blue-500 hover:text-blue-600 text-sm font-medium">
-                        Create your first invoice
-                      </button>
+                      <p className="text-slate-400 text-sm">Generate invoices from Fee Structure tab</p>
                     </div>
                   </td>
                 </tr>
@@ -1161,7 +1059,7 @@ export default function Finance() {
             <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700" style={{ backgroundColor: 'var(--primary-color)' }}>
               <div className="flex items-center gap-2">
                 <Upload size={18} className="text-white" />
-                <h2 className="font-bold text-white">Import {importType === 'invoices' ? 'Invoices' : 'Payments'}</h2>
+                <h2 className="font-bold text-white">Import Payments</h2>
               </div>
               <button onClick={closeImportModal} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
                 <X size={18} className="text-white" />
@@ -1189,7 +1087,7 @@ export default function Finance() {
                   <div className="bg-slate-50 dark:bg-slate-700/50 rounded-lg p-3">
                     <h4 className="font-medium text-slate-700 dark:text-slate-200 mb-2 text-sm">Expected Fields:</h4>
                     <div className="grid grid-cols-2 gap-1.5 text-xs">
-                      {(importType === 'invoices' ? invoiceExpectedFields : paymentExpectedFields).map(field => (
+                      {paymentExpectedFields.map(field => (
                         <div key={field.key} className="flex items-center gap-1.5">
                           <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${field.required ? 'bg-red-500' : 'bg-slate-400'}`} />
                           <span className="text-slate-600 dark:text-slate-300 truncate">{field.label}</span>
@@ -1213,7 +1111,7 @@ export default function Finance() {
                   <div className="max-h-64 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg">
                     <table className="w-full text-xs">
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                        {(importType === 'invoices' ? invoiceExpectedFields : paymentExpectedFields).filter(f => f.required).map(field => (
+                        {paymentExpectedFields.filter((f: any) => f.required).map((field: any) => (
                           <tr key={field.key}>
                             <td className="px-3 py-2 text-slate-700 dark:text-slate-200 font-medium whitespace-nowrap">
                               {field.label}*
@@ -1257,7 +1155,7 @@ export default function Finance() {
 
                   <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-2.5">
                     <p className="text-sm text-emerald-700 dark:text-emerald-300">
-                      <strong>{importPreview.length}</strong> {importType} ready to import
+                      <strong>{importPreview.length}</strong> payments ready to import
                     </p>
                   </div>
 
