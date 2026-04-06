@@ -32,6 +32,7 @@ import { userDBManager } from '../lib/database/UserDatabaseManager';
 import GlobalSearch from './GlobalSearch';
 import InstallPWA from './InstallPWA';
 import { ensurePlanRenewalNotifications, markRenewalPopupShown, shouldShowRenewalPopup, SubscriptionAccessState } from '../utils/plans';
+import { getRecycleBin } from '../utils/recycleBin';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -93,12 +94,10 @@ export default function Layout({ children }: LayoutProps) {
   }, []);
 
   function loadDeletedItemsCount() {
+    if (!user?.id) return;
     try {
-      const stored = localStorage.getItem('recycleBin');
-      if (stored) {
-        const items = JSON.parse(stored);
-        setDeletedItemsCount(items.length);
-      }
+      const items = getRecycleBin(user.id);
+      setDeletedItemsCount(items.length);
     } catch (error) {
       console.error('Failed to load deleted items count:', error);
     }

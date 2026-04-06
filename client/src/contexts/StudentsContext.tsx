@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { Student } from '@schofy/shared';
 import { dataService } from '../lib/database/DataService';
 import { useAuth } from './AuthContext';

@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { useCurrency } from '../hooks/useCurrency';
 import { exportToCSV, exportToPDF, exportToExcel } from '../utils/export';
 import { useStudents } from '../contexts/StudentsContext';
+import { addToRecycleBin } from '../utils/recycleBin';
 
 export default function Transport() {
   const { user } = useAuth();
@@ -84,16 +85,13 @@ export default function Transport() {
         }
         
         if (route) {
-          const recycleItem = {
+          addToRecycleBin(user.id, {
             id: `transport-${Date.now()}`,
-            type: 'transport' as const,
+            type: 'transport',
             name: route.name,
             data: { route, assignments: relatedAssignments },
             deletedAt: new Date().toISOString()
-          };
-          const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
-          localStorage.setItem('recycleBin', JSON.stringify([...existing, recycleItem]));
-          window.dispatchEvent(new Event('recycleBinUpdated'));
+          });
         }
         
         setRoutes(prev => prev.filter(r => r.id !== id));

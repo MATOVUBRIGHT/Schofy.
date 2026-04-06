@@ -17,7 +17,7 @@ export default function Settings() {
   const { primaryColor, setPrimaryColor } = useTheme();
   const { addToast } = useToast();
   const { setCurrency } = useCurrency();
-  const { isOnline, isSyncing, pendingChanges, lastSyncTime, syncNow, exportBackup, importBackup, isSyncEnabled, enableSync, disableSync, isSupabaseConfigured } = useSync();
+  const { isOnline, isSyncing, pendingChanges, lastSyncTime, syncNow, forceFullSync, exportBackup, importBackup, isSyncEnabled, enableSync, disableSync, isSupabaseConfigured } = useSync();
   const { user } = useAuth();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
@@ -360,6 +360,22 @@ export default function Settings() {
                   >
                     <RefreshCw size={16} className={isSyncing ? 'animate-spin' : ''} />
                     Sync Now
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await forceFullSync();
+                      } catch (err) {
+                        console.error('Full sync error:', err);
+                        addToast('Full sync failed. Check console for details.', 'error');
+                      }
+                    }}
+                    disabled={isSyncing}
+                    className="btn btn-secondary flex items-center gap-2"
+                    title="Pull all data from cloud to this device"
+                  >
+                    <Download size={16} />
+                    Force Full Sync
                   </button>
                   <button
                     onClick={disableSync}

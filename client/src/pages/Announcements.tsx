@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { exportToCSV, exportToPDF, exportToExcel } from '../utils/export';
 import { useAuth } from '../contexts/AuthContext';
 import { dataService } from '../lib/database/DataService';
+import { addToRecycleBin } from '../utils/recycleBin';
 
 const priorityConfig: Record<string, { 
   bg: string; 
@@ -157,16 +158,13 @@ export default function Announcements() {
         await dataService.delete(user.id, 'announcements', id);
         
         if (announcement) {
-          const recycleItem = {
+          addToRecycleBin(user.id, {
             id: `announcement-${Date.now()}`,
-            type: 'announcement' as const,
+            type: 'announcement',
             name: announcement.title,
             data: announcement,
             deletedAt: new Date().toISOString()
-          };
-          const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
-          localStorage.setItem('recycleBin', JSON.stringify([...existing, recycleItem]));
-          window.dispatchEvent(new Event('recycleBinUpdated'));
+          });
         }
         
         setAnnouncements(prev => prev.filter(a => a.id !== id));
@@ -225,26 +223,21 @@ export default function Announcements() {
     if (!user?.id) return;
     
     try {
-      const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
       const now = new Date().toISOString();
       
       for (const id of selectedAnnouncements) {
         const announcement = announcements.find(a => a.id === id);
         if (announcement) {
           await dataService.delete(user.id, 'announcements', id);
-          const recycleItem = {
+          addToRecycleBin(user.id, {
             id: `announcement-${Date.now()}-${Math.random()}`,
-            type: 'announcement' as const,
+            type: 'announcement',
             name: announcement.title,
             data: announcement,
             deletedAt: now
-          };
-          existing.push(recycleItem);
+          });
         }
       }
-      
-      localStorage.setItem('recycleBin', JSON.stringify(existing));
-      window.dispatchEvent(new Event('recycleBinUpdated'));
       
       setAnnouncements(prev => prev.filter(a => !selectedAnnouncements.has(a.id)));
       setSelectedAnnouncements(new Set());

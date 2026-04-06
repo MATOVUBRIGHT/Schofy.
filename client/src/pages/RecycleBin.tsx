@@ -4,13 +4,20 @@ import { Trash2, RotateCcw, Trash, ArrowLeft, Check, Search } from 'lucide-react
 import { useAuth } from '../contexts/AuthContext';
 import { dataService } from '../lib/database/DataService';
 import { useToast } from '../contexts/ToastContext';
+import { getRecycleBin, removeFromRecycleBin, clearRecycleBin, DeletedItem } from '../utils/recycleBin';
 
-interface DeletedItem {
-  id: string;
-  type: 'student' | 'staff' | 'announcement' | 'class' | 'subject' | 'fee' | 'exam' | 'transport';
-  name: string;
-  data: any;
-  deletedAt: string;
+function getStoreName(type: string): string | null {
+  switch (type) {
+    case 'student': return 'students';
+    case 'staff': return 'staff';
+    case 'announcement': return 'announcements';
+    case 'class': return 'classes';
+    case 'subject': return 'subjects';
+    case 'fee': return 'fees';
+    case 'exam': return 'exams';
+    case 'transport': return 'transportRoutes';
+    default: return null;
+  }
 }
 
 export default function RecycleBin() {
@@ -23,25 +30,18 @@ export default function RecycleBin() {
   const [filterType, setFilterType] = useState<string>('');
 
   useEffect(() => {
-    loadDeletedItems();
-  }, []);
-
-  function loadDeletedItems() {
-    try {
-      const stored = localStorage.getItem('recycleBin');
-      if (stored) {
-        setDeletedItems(JSON.parse(stored));
-      }
-    } catch (error) {
-      console.error('Failed to load deleted items:', error);
+    if (user?.id) {
+      const items = getRecycleBin(user.id);
+      setDeletedItems(items);
     }
-  }
+  }, [user?.id]);
 
-  function saveDeletedItems(items: DeletedItem[]) {
-    setDeletedItems(items);
-    localStorage.setItem('recycleBin', JSON.stringify(items));
-    window.dispatchEvent(new Event('recycleBinUpdated'));
-  }
+  const loadDeletedItems = () => {
+    if (user?.id) {
+      const items = getRecycleBin(user.id);
+      setDeletedItems(items);
+    }
+  };
 
   async function restoreItem(id: string) {
     if (!user?.id) return;
@@ -53,8 +53,8 @@ export default function RecycleBin() {
       if (storeName) {
         await dataService.create(user.id, storeName, item.data as any);
       }
-      const newItems = deletedItems.filter(i => i.id !== id);
-      saveDeletedItems(newItems);
+      removeFromRecycleBin(user.id, id);
+      loadDeletedItems();
       setSelectedItems(prev => {
         const newSet = new Set(prev);
         newSet.delete(id);
@@ -66,26 +66,13 @@ export default function RecycleBin() {
     }
   }
 
-  function getStoreName(type: string): string | null {
-    switch (type) {
-      case 'student': return 'students';
-      case 'staff': return 'staff';
-      case 'announcement': return 'announcements';
-      case 'class': return 'classes';
-      case 'subject': return 'subjects';
-      case 'fee': return 'fees';
-      case 'exam': return 'exams';
-      case 'transport': return 'transportRoutes';
-      default: return null;
-    }
-  }
-
   function permanentlyDeleteItem(id: string) {
+    if (!user?.id) return;
     const item = deletedItems.find(i => i.id === id);
     if (!item) return;
 
-    const newItems = deletedItems.filter(i => i.id !== id);
-    saveDeletedItems(newItems);
+    removeFromRecycleBin(user.id, id);
+    loadDeletedItems();
     setSelectedItems(prev => {
       const newSet = new Set(prev);
       newSet.delete(id);
@@ -99,14 +86,17 @@ export default function RecycleBin() {
   }
 
   function deleteSelected() {
+    if (!user?.id) return;
     if (confirm(`Are you sure you want to permanently delete ${selectedItems.size} item(s)?`)) {
       selectedItems.forEach(id => permanentlyDeleteItem(id));
     }
   }
 
   function emptyBin() {
+    if (!user?.id) return;
     if (confirm('Are you sure you want to permanently delete all items in the recycle bin? This action cannot be undone.')) {
-      saveDeletedItems([]);
+      clearRecycleBin(user.id);
+      setDeletedItems([]);
       setSelectedItems(new Set());
       addToast('Recycle bin emptied', 'success');
     }

@@ -11,6 +11,7 @@ import { useCurrency } from '../hooks/useCurrency';
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from '../contexts/AuthContext';
 import { dataService } from '../lib/database/DataService';
+import { addToRecycleBin } from '../utils/recycleBin';
 
 const avatarColors = [
   'bg-violet-500',
@@ -228,26 +229,21 @@ export default function Staff() {
     if (!confirm(`Are you sure you want to delete ${selectedStaff.size} staff member(s)?`)) return;
     
     try {
-      const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
       const now = new Date().toISOString();
       
       for (const id of selectedStaff) {
         const staffMember = staff.find(s => s.id === id);
         if (staffMember) {
           await dataService.delete(user.id, 'staff', id);
-          const recycleItem = {
+          addToRecycleBin(user.id, {
             id: `staff-${Date.now()}-${Math.random()}`,
-            type: 'staff' as const,
+            type: 'staff',
             name: `${staffMember.firstName} ${staffMember.lastName}`,
             data: staffMember,
             deletedAt: now
-          };
-          existing.push(recycleItem);
+          });
         }
       }
-      
-      localStorage.setItem('recycleBin', JSON.stringify(existing));
-      window.dispatchEvent(new Event('recycleBinUpdated'));
       
       setStaff(prev => prev.filter(s => !selectedStaff.has(s.id)));
       setSelectedStaff(new Set());
@@ -304,16 +300,13 @@ export default function Staff() {
         await dataService.delete(user.id, 'staff', id);
         
         if (staffMember) {
-          const recycleItem = {
+          addToRecycleBin(user.id, {
             id: `staff-${Date.now()}`,
-            type: 'staff' as const,
+            type: 'staff',
             name: `${staffMember.firstName} ${staffMember.lastName}`,
             data: staffMember,
             deletedAt: new Date().toISOString()
-          };
-          const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
-          localStorage.setItem('recycleBin', JSON.stringify([...existing, recycleItem]));
-          window.dispatchEvent(new Event('recycleBinUpdated'));
+          });
         }
         
         setStaff((prev) => prev.filter((s) => s.id !== id));

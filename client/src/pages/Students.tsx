@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Plus, Search, ChevronLeft, ChevronRight, Edit, Trash2, Eye, UserX, Users, Download, Upload, FileText, ChevronDown, X, ArrowRight, Check, Square, CheckSquare, UserCheck, UserMinus, GraduationCap, Filter, Mail, Award } from 'lucide-react';
 import { useToast } from '../contexts/ToastContext';
@@ -11,6 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { countsTowardPlan, getPlanUsage } from '../utils/plans';
 import { dataService } from '../lib/database/DataService';
 import { getClassDisplayName } from '../utils/classroom';
+import { addToRecycleBin } from '../utils/recycleBin';
 
 const avatarColors = [
   'bg-rose-500',
@@ -48,7 +49,7 @@ function generateStudentId(firstName: string, lastName: string): string {
 
 export default function Students() {
   const { user } = useAuth();
-  const { loadPage, searchStudents, refresh: refreshContext } = useStudents();
+  const { loadPage, searchStudents } = useStudents();
   const [students, setStudents] = useState<Student[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -78,7 +79,7 @@ export default function Students() {
   const [showClassFilter, setShowClassFilter] = useState(false);
   const [completedYearFilter, setCompletedYearFilter] = useState<string>('');
   const [planLimitMessage, setPlanLimitMessage] = useState<string | null>(null);
-  const [classes, setClasses] = useState<Class[]>([]);
+  const [classes] = useState<Class[]>([]);
   const navigate = useNavigate();
   const statusFilterRef = useRef<HTMLDivElement>(null);
   const classFilterRef = useRef<HTMLDivElement>(null);
@@ -236,36 +237,27 @@ export default function Students() {
 
   async function handleDelete(id: string) {
     if (!user?.id) return;
-    if (confirm('Are you sure you want to delete this student? All associated fees, payments, invoices, and other records will also be deleted.')) {
-      try {
-        const student = students.find(s => s.id === id);
-        
-        // Use batchDelete for related records
-        const tables = ['fees', 'payments', 'invoices', 'bursaries', 'transportAssignments', 'examResults'];
-        for (const table of tables) {
-          const records = await dataService.getAll(user.id, table);
-          const relatedIds = records.filter(r => r.studentId === id).map(r => r.id);
-          if (relatedIds.length > 0) {
-            await dataService.batchDelete(user.id, table, relatedIds);
-          }
-        }
-        
-        const attendanceRecords = await dataService.getAll(user.id, 'attendance');
-        const relatedAttendanceIds = attendanceRecords
-          .filter(r => r.entityType === 'student' && r.entityId === id)
-          .map(r => r.id);
-        if (relatedAttendanceIds.length > 0) {
-          await dataService.batchDelete(user.id, 'attendance', relatedAttendanceIds);
-        }
-        
-        // Delete the student
-        await dataService.delete(user.id, 'students', id);
-        
-        // Update local state instead of re-fetching everything
-        setStudents(prev => prev.filter(s => s.id !== id));
-        setTotalCount(prev => prev - 1);
-        
-        if (student) {
+    if (!confirm('Are you sure you want to delete this student? This action cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      const student = students.find(s => s.id === id);
+      
+      // Delete the student directly - related records will be handled by sync
+      const result = await dataService.delete(user.id, 'students', id);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to delete');
+      }
+      
+      // Update local state
+      setStudents(prev => prev.filter(s => s.id !== id));
+      setTotalCount(prev => prev - 1);
+      
+      // Add to recycle bin
+      if (student) {
+        try {
           const recycleItem = {
             id: `student-${Date.now()}`,
             type: 'student' as const,
@@ -273,16 +265,16 @@ export default function Students() {
             data: student,
             deletedAt: new Date().toISOString()
           };
-          const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
-          localStorage.setItem('recycleBin', JSON.stringify([...existing, recycleItem]));
-          window.dispatchEvent(new Event('recycleBinUpdated'));
+          addToRecycleBin(user.id, recycleItem);
+        } catch (e) {
+          console.error('Recycle bin error:', e);
         }
-        
-        addToast('Student and all associated records deleted', 'success');
-      } catch (error) {
-        console.error('Delete error:', error);
-        addToast('Failed to delete student', 'error');
       }
+      
+      addToast('Student deleted', 'success');
+    } catch (error) {
+      console.error('Delete error:', error);
+      addToast('Failed to delete student', 'error');
     }
   }
 
@@ -372,85 +364,37 @@ export default function Students() {
   async function handleBulkDelete() {
     if (!user?.id) return;
     if (selectedStudents.size === 0) return;
-    if (!confirm(`Are you sure you want to delete ${selectedStudents.size} student(s)? All associated fees, payments, invoices, and other records will also be deleted?`)) return;
+    if (!confirm(`Are you sure you want to delete ${selectedStudents.size} student(s)? This action cannot be undone.`)) return;
     
     try {
-      const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
       const now = new Date().toISOString();
+      let deletedCount = 0;
       
       for (const id of selectedStudents) {
         const student = students.find(s => s.id === id);
+        const result = await dataService.delete(user.id, 'students', id);
         
-        const fees = await dataService.getAll(user.id, 'fees');
-        for (const fee of fees) {
-          if (fee.studentId === id) {
-            await dataService.delete(user.id, 'fees', fee.id);
-          }
-        }
-        
-        const payments = await dataService.getAll(user.id, 'payments');
-        for (const payment of payments) {
-          if (payment.studentId === id) {
-            await dataService.delete(user.id, 'payments', payment.id);
-          }
-        }
-        
-        const invoices = await dataService.getAll(user.id, 'invoices');
-        for (const invoice of invoices) {
-          if (invoice.studentId === id) {
-            await dataService.delete(user.id, 'invoices', invoice.id);
-          }
-        }
-        
-        const bursaries = await dataService.getAll(user.id, 'bursaries');
-        for (const bursary of bursaries) {
-          if (bursary.studentId === id) {
-            await dataService.delete(user.id, 'bursaries', bursary.id);
-          }
-        }
-        
-        const transportAssignments = await dataService.getAll(user.id, 'transportAssignments');
-        for (const assignment of transportAssignments) {
-          if (assignment.studentId === id) {
-            await dataService.delete(user.id, 'transportAssignments', assignment.id);
-          }
-        }
-        
-        const examResults = await dataService.getAll(user.id, 'examResults');
-        for (const result of examResults) {
-          if (result.studentId === id) {
-            await dataService.delete(user.id, 'examResults', result.id);
-          }
-        }
-        
-        const attendanceRecords = await dataService.getAll(user.id, 'attendance');
-        for (const record of attendanceRecords) {
-          if (record.entityType === 'student' && record.entityId === id) {
-            await dataService.delete(user.id, 'attendance', record.id);
-          }
-        }
-        
-        if (student) {
-          await dataService.delete(user.id, 'students', id);
-          const recycleItem = {
+        if (result.success && student) {
+          deletedCount++;
+          addToRecycleBin(user.id, {
             id: `student-${Date.now()}-${Math.random()}`,
-            type: 'student' as const,
+            type: 'student',
             name: `${student.firstName} ${student.lastName}`,
             data: student,
             deletedAt: now
-          };
-          existing.push(recycleItem);
+          });
         }
       }
       
-      localStorage.setItem('recycleBin', JSON.stringify(existing));
-      window.dispatchEvent(new Event('recycleBinUpdated'));
-      window.dispatchEvent(new Event('studentsUpdated'));
+      if (deletedCount > 0) {
+        window.dispatchEvent(new Event('studentsUpdated'));
+      }
       
       setSelectedStudents(new Set());
       setSelectMode(false);
-      addToast(`${selectedStudents.size} students and all associated records deleted`, 'success');
+      addToast(`${deletedCount} students deleted`, 'success');
     } catch (error) {
+      console.error('Bulk delete error:', error);
       addToast('Failed to delete students', 'error');
     }
   }
@@ -1647,8 +1591,8 @@ export default function Students() {
           <div className="p-4 flex items-center justify-between border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
             <p className="text-sm text-slate-500">
               Showing <span className="font-medium text-slate-700 dark:text-slate-300">{(currentPage - 1) * itemsPerPage + 1}</span> to{' '}
-              <span className="font-medium text-slate-700 dark:text-slate-300">{Math.min(currentPage * itemsPerPage, filteredStudents.length)}</span> of{' '}
-              <span className="font-medium text-slate-700 dark:text-slate-300">{filteredStudents.length}</span>
+              <span className="font-medium text-slate-700 dark:text-slate-300">{Math.min(currentPage * itemsPerPage, totalCount)}</span> of{' '}
+              <span className="font-medium text-slate-700 dark:text-slate-300">{totalCount}</span>
             </p>
             <div className="flex items-center gap-2">
               <button

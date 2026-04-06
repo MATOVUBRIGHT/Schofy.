@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 import { syncService } from '../services/sync';
@@ -11,6 +11,7 @@ interface SyncContextType {
   lastSyncTime: Date | null;
   pendingChanges: number;
   syncNow: () => Promise<void>;
+  forceFullSync: () => Promise<void>;
   exportBackup: () => Promise<void>;
   importBackup: (file: File) => Promise<boolean>;
   enableSync: () => Promise<void>;
@@ -21,13 +22,27 @@ interface SyncContextType {
 
 const SyncContext = createContext<SyncContextType | undefined>(undefined);
 
+const SYNCED_TABLES = [
+  'students', 'staff', 'classes', 'subjects',
+  'attendance', 'fees', 'payments',
+  'announcements', 'exams', 'exam_results',
+  'transport_routes', 'transport_assignments'
+];
+
 export function SyncProvider({ children }: { children: ReactNode }) {
   const { isOnline, user, schoolId } = useAuth();
   const { addToast } = useToast();
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(
+    localStorage.getItem('schofy_last_sync') 
+      ? new Date(localStorage.getItem('schofy_last_sync')!) 
+      : null
+  );
   const [pendingChanges, setPendingChanges] = useState(0);
-  const [syncEnabled, setSyncEnabled] = useState(false);
+  const [syncEnabled, setSyncEnabled] = useState(
+    localStorage.getItem('schofy_sync_enabled') === 'true'
+  );
+  const channelRef = useRef<any>(null);
 
   // Configure sync service with Supabase
   useEffect(() => {
@@ -41,33 +56,153 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Set user ID when schoolId changes
+  // Set user ID when schoolId changes and start sync
   useEffect(() => {
     if (schoolId) {
       syncService.setUserId(schoolId);
       console.log('👤 Sync user ID set to:', schoolId);
+      
+      // Start sync if enabled
+      if (syncEnabled && isOnline) {
+        syncService.enableSync();
+        syncService.startBackgroundSync();
+      }
     }
-  }, [schoolId]);
+  }, [schoolId, syncEnabled, isOnline]);
 
-  // Start/stop real-time sync based on online status and sync enabled state
+  // Subscribe to Supabase Realtime for all tables
   useEffect(() => {
-    if (isOnline && syncEnabled && user && schoolId) {
-      console.log('🔄 Starting real-time sync - online and enabled');
-      syncService.enableSync();
-      syncService.startBackgroundSync();
-      loadPendingCount();
-    } else {
-      console.log('⏸️ Stopping real-time sync');
-      syncService.disableSync();
-      syncService.stopBackgroundSync();
-    }
+    if (!user?.id || !supabase || !isSupabaseConfigured || !syncEnabled) return;
+
+    console.log('🔔 Setting up Supabase Realtime subscription...');
+
+    // Create a single channel for all tables
+    channelRef.current = supabase.channel(`schofy-sync-${user.id}`);
+
+    // Subscribe to all tables
+    SYNCED_TABLES.forEach(table => {
+      channelRef.current.on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: table,
+          filter: `user_id=eq.${user.id}`
+        },
+        async (payload: any) => {
+          console.log(`📡 Realtime: ${table} - ${payload.eventType}`);
+          
+          try {
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              await applyRemoteChange(user.id, table, payload.new);
+            } else if (payload.eventType === 'DELETE') {
+              await applyRemoteChange(user.id, table, payload.old);
+            }
+            
+            // Notify UI to refresh
+            window.dispatchEvent(new CustomEvent('schofyDataRefresh', { 
+              detail: { table, action: payload.eventType } 
+            }));
+          } catch (e) {
+            console.error(`Realtime apply error for ${table}:`, e);
+          }
+        }
+      );
+    });
+
+    channelRef.current.subscribe((status: string) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('✅ Realtime subscription active');
+      } else if (status === 'CHANNEL_ERROR') {
+        console.error('❌ Realtime channel error');
+      }
+    });
 
     return () => {
-      syncService.stopBackgroundSync();
+      if (channelRef.current && supabase) {
+        supabase.removeChannel(channelRef.current);
+      }
     };
-  }, [isOnline, syncEnabled, user, schoolId]);
+  }, [user?.id, syncEnabled]);
 
-  // Load pending count periodically - only when sync is enabled and online
+  // Convert snake_case to camelCase
+  const toCamel = (str: string) => str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+
+  // Apply remote change to local DB
+  const applyRemoteChange = async (userId: string, tableName: string, record: any) => {
+    try {
+      const camelTable = toCamel(tableName);
+      const formatted: any = {};
+      
+      for (const [key, value] of Object.entries(record)) {
+        formatted[toCamel(key)] = value;
+      }
+      
+      formatted.userId = userId;
+      formatted.syncStatus = 'synced';
+      formatted.deviceId = userDBManager.getDeviceId();
+      
+      await userDBManager.put(userId, camelTable, formatted);
+      console.log(`📱 Applied remote change: ${camelTable}`);
+    } catch (e) {
+      console.error(`Failed to apply remote change for ${tableName}:`, e);
+    }
+  };
+
+  // Pull ALL data from cloud (for new devices or full sync)
+  const forceFullSync = useCallback(async () => {
+    if (!user?.id || !supabase || !isSupabaseConfigured) {
+      addToast('Cloud sync not configured', 'error');
+      return;
+    }
+
+    setIsSyncing(true);
+    addToast('Starting full sync...', 'info');
+
+    try {
+      console.log('📥 Starting FULL pull from cloud...');
+      
+      for (const table of SYNCED_TABLES) {
+        try {
+          const { data, error } = await supabase
+            .from(table)
+            .select('*')
+            .eq('user_id', user.id)
+            .is('deleted_at', null);
+
+          if (error) {
+            console.error(`Error pulling ${table}:`, error);
+            continue;
+          }
+
+          if (data && data.length > 0) {
+            for (const record of data) {
+              await applyRemoteChange(user.id, table, record);
+            }
+            console.log(`📥 Pulled ${data.length} records from ${table}`);
+          }
+        } catch (e) {
+          console.error(`Failed to pull ${table}:`, e);
+        }
+      }
+
+      const now = new Date().toISOString();
+      localStorage.setItem('schofy_last_sync', now);
+      setLastSyncTime(new Date(now));
+
+      // Dispatch full refresh
+      window.dispatchEvent(new CustomEvent('schofyDataRefresh', { detail: { type: 'full_sync' } }));
+      
+      addToast('Full sync completed', 'success');
+    } catch (e: any) {
+      console.error('Full sync failed:', e);
+      addToast('Full sync failed: ' + e.message, 'error');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [user?.id, addToast]);
+
+  // Load pending count periodically
   const loadPendingCount = useCallback(async () => {
     if (!user?.id || !syncEnabled) {
       setPendingChanges(0);
@@ -88,13 +223,16 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       return;
     }
     loadPendingCount();
-    const interval = setInterval(loadPendingCount, 10000);
+    const interval = setInterval(loadPendingCount, 5000);
     return () => clearInterval(interval);
   }, [syncEnabled, loadPendingCount]);
 
   const syncNow = useCallback(async () => {
     if (!isOnline || isSyncing || !syncEnabled || !user) {
-      console.log('⚠️ Sync skipped - offline:', !isOnline, 'already syncing:', isSyncing);
+      console.log('⚠️ Sync skipped - offline:', !isOnline, 'syncing:', isSyncing, 'enabled:', syncEnabled);
+      if (!syncEnabled) {
+        addToast('Enable cloud sync first', 'warning');
+      }
       return;
     }
 
@@ -103,8 +241,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     
     try {
       await syncService.syncIncremental();
-      setLastSyncTime(new Date());
+      const now = new Date();
+      setLastSyncTime(now);
+      localStorage.setItem('schofy_last_sync', now.toISOString());
       await loadPendingCount();
+      
+      // Notify all components to refresh
+      window.dispatchEvent(new CustomEvent('schofyDataRefresh', { detail: { type: 'manual_sync' } }));
+      
       addToast('Data synced successfully', 'success');
     } catch (error) {
       console.error('Sync failed:', error);
@@ -114,14 +258,23 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     }
   }, [isOnline, syncEnabled, user, loadPendingCount, isSyncing, addToast]);
 
+  // Auto-sync when coming back online
+  useEffect(() => {
+    if (isOnline && syncEnabled && user) {
+      console.log('🔄 Back online - triggering sync');
+      syncNow();
+    }
+  }, [isOnline]);
+
   const exportBackup = useCallback(async () => {
     if (!user?.id) return;
     
     try {
       const tables = [
         'students', 'staff', 'classes', 'subjects',
-        'attendance', 'fees', 'feeStructures', 'payments',
-        'announcements', 'exams', 'examResults'
+        'attendance', 'fees', 'payments',
+        'announcements', 'exams', 'exam_results',
+        'transport_routes', 'transport_assignments'
       ];
 
       const data: Record<string, any[]> = {};
@@ -183,7 +336,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      window.dispatchEvent(new Event('dataRefresh'));
+      window.dispatchEvent(new Event('schofyDataRefresh'));
       addToast('Backup imported successfully', 'success');
       return true;
     } catch (error) {
@@ -209,18 +362,11 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       setSyncEnabled(true);
       syncService.configure({ supabaseClient: supabase });
       syncService.setUserId(user.id);
+      syncService.enableSync();
+      syncService.startBackgroundSync();
       
-      try {
-        syncService.startBackgroundSync();
-      } catch (syncError) {
-        console.error('Background sync error:', syncError);
-      }
-      
-      try {
-        await syncNow();
-      } catch (syncError) {
-        console.error('Initial sync error:', syncError);
-      }
+      // Do initial sync
+      await syncNow();
       
       addToast('Cloud sync enabled', 'success');
     } catch (error) {
@@ -243,6 +389,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       lastSyncTime,
       pendingChanges,
       syncNow,
+      forceFullSync,
       exportBackup,
       importBackup,
       enableSync,
@@ -264,7 +411,7 @@ export function useSync() {
 }
 
 export function SyncStatusIndicator() {
-  const { isOnline, isSyncing, pendingChanges, lastSyncTime, syncNow, isSyncEnabled } = useSync();
+  const { isOnline, isSyncing, pendingChanges, lastSyncTime, syncNow, forceFullSync, isSyncEnabled } = useSync();
 
   if (!isSyncEnabled) {
     return null;
@@ -296,16 +443,29 @@ export function SyncStatusIndicator() {
   };
 
   return (
-    <button
-      onClick={syncNow}
-      disabled={!isOnline || isSyncing}
-      className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
-      title={`Last sync: ${formatLastSync()}`}
-    >
-      <div className={`w-2 h-2 rounded-full ${getStatusColor()}`} />
-      <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-        {getStatusText()}
-      </span>
-    </button>
+    <div className="flex items-center gap-2">
+      <button
+        onClick={syncNow}
+        disabled={!isOnline || isSyncing}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
+        title={`Last sync: ${formatLastSync()}`}
+      >
+        <div className={`w-2 h-2 rounded-full ${getStatusColor()}`} />
+        <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+          {getStatusText()}
+        </span>
+      </button>
+      
+      <button
+        onClick={forceFullSync}
+        disabled={isSyncing}
+        className="p-1.5 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
+        title="Force full sync from cloud"
+      >
+        <svg className={`w-4 h-4 text-slate-600 dark:text-slate-300 ${isSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </button>
+    </div>
   );
 }

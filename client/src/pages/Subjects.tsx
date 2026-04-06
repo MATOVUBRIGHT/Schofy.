@@ -7,6 +7,7 @@ import { exportToCSV, exportToPDF, exportToExcel } from '../utils/export';
 import { getClassDisplayName } from '../utils/classroom';
 import { useAuth } from '../contexts/AuthContext';
 import { dataService } from '../lib/database/DataService';
+import { addToRecycleBin } from '../utils/recycleBin';
 
 const ugandaSubjects: Record<string, { name: string; code: string }[]> = {
   'primary': [
@@ -244,26 +245,21 @@ export default function Subjects() {
     if (!user?.id) return;
     
     try {
-      const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
       const now = new Date().toISOString();
       
       for (const id of selectedSubjects) {
         const subject = subjects.find(s => s.id === id);
         if (subject) {
           await dataService.delete(user.id, 'subjects', id);
-          const recycleItem = {
+          addToRecycleBin(user.id, {
             id: `subject-${Date.now()}-${Math.random()}`,
-            type: 'subject' as const,
+            type: 'subject',
             name: subject.name,
             data: subject,
             deletedAt: now
-          };
-          existing.push(recycleItem);
+          });
         }
       }
-      
-      localStorage.setItem('recycleBin', JSON.stringify(existing));
-      window.dispatchEvent(new Event('recycleBinUpdated'));
       
       setSubjects(prev => prev.filter(s => !selectedSubjects.has(s.id)));
       setSelectedSubjects(new Set());
@@ -318,16 +314,13 @@ export default function Subjects() {
         await dataService.delete(user.id, 'subjects', id);
         
         if (subject) {
-          const recycleItem = {
+          addToRecycleBin(user.id, {
             id: `subject-${Date.now()}`,
-            type: 'subject' as const,
+            type: 'subject',
             name: subject.name,
             data: subject,
             deletedAt: new Date().toISOString()
-          };
-          const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
-          localStorage.setItem('recycleBin', JSON.stringify([...existing, recycleItem]));
-          window.dispatchEvent(new Event('recycleBinUpdated'));
+          });
         }
         
         setSubjects(prev => prev.filter(s => s.id !== id));

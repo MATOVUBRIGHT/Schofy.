@@ -296,12 +296,43 @@ class DataService {
     // ALWAYS return local data first for speed
     const localData = await userDBManager.getAll(userId, tableName);
     
+    // If local data is empty (new device), do a full pull
+    if (localData.length === 0 && this.isOnline() && isSupabaseConfigured && supabase) {
+      console.log(`📥 Full sync for ${tableName} (new device detected)`);
+      await this.pullFull(userId, tableName);
+      return await userDBManager.getAll(userId, tableName);
+    }
+    
     // In background, if online, pull changes from cloud (Delta Sync)
     if (this.isOnline() && isSupabaseConfigured && supabase) {
       this.pullDelta(userId, tableName).catch(err => console.error(`Delta pull failed for ${tableName}:`, err));
     }
 
     return localData;
+  }
+  
+  private async pullFull(userId: string, tableName: string): Promise<void> {
+    if (!this.isOnline() || !isSupabaseConfigured || !supabase) return;
+
+    try {
+      const { data, error } = await supabase
+        .from(tableName)
+        .select('*')
+        .eq('user_id', userId)
+        .is('deleted_at', null);
+
+      if (!error && data && data.length > 0) {
+        console.log(`📥 Full pull: importing ${data.length} records for ${tableName}`);
+        for (const item of data) {
+          const mapped = this.mapSupabaseToLocal(item, tableName);
+          mapped.syncStatus = 'synced';
+          await userDBManager.put(userId, tableName, mapped);
+        }
+        window.dispatchEvent(new Event('dataRefresh'));
+      }
+    } catch (err) {
+      console.error(`Full pull error for ${tableName}:`, err);
+    }
   }
 
   async getPage(
@@ -377,7 +408,7 @@ class DataService {
       const { data, error } = await supabase
         .from(tableName)
         .select('*')
-        .eq('school_id', userId)
+        .eq('user_id', userId)
         .gt('updated_at', lastSyncTime);
 
       if (!error && data && data.length > 0) {

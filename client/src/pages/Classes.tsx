@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { exportToCSV, exportToPDF, exportToExcel } from '../utils/export';
 import { useAuth } from '../contexts/AuthContext';
 import { dataService } from '../lib/database/DataService';
+import { addToRecycleBin } from '../utils/recycleBin';
 
 const classColors = [
   { card: 'card-coral-light', gradient: 'from-orange-100 to-amber-100', text: 'text-orange-600' },
@@ -138,26 +139,21 @@ export default function Classes() {
     if (!user?.id) return;
     
     try {
-      const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
       const now = new Date().toISOString();
       
       for (const id of selectedClasses) {
         const classItem = classes.find(c => c.id === id);
         if (classItem) {
           await dataService.delete(user.id, 'classes', id);
-          const recycleItem = {
+          addToRecycleBin(user.id, {
             id: `class-${Date.now()}-${Math.random()}`,
-            type: 'class' as const,
+            type: 'class',
             name: classItem.name,
             data: classItem,
             deletedAt: now
-          };
-          existing.push(recycleItem);
+          });
         }
       }
-      
-      localStorage.setItem('recycleBin', JSON.stringify(existing));
-      window.dispatchEvent(new Event('recycleBinUpdated'));
       
       setClasses(prev => prev.filter(c => !selectedClasses.has(c.id)));
       setSelectedClasses(new Set());
@@ -205,16 +201,13 @@ export default function Classes() {
         await dataService.delete(user.id, 'classes', id);
         
         if (classItem) {
-          const recycleItem = {
+          addToRecycleBin(user.id, {
             id: `class-${Date.now()}`,
-            type: 'class' as const,
+            type: 'class',
             name: classItem.name,
             data: classItem,
             deletedAt: new Date().toISOString()
-          };
-          const existing = JSON.parse(localStorage.getItem('recycleBin') || '[]');
-          localStorage.setItem('recycleBin', JSON.stringify([...existing, recycleItem]));
-          window.dispatchEvent(new Event('recycleBinUpdated'));
+          });
         }
         
         setClasses(prev => prev.filter(c => c.id !== id));
