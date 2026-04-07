@@ -116,41 +116,35 @@ class SyncService {
    * UPLOAD PHASE: Push all pending local changes to Supabase
    */
   private async uploadPendingChanges(userId: string): Promise<void> {
-    const pendingRecords = await userDBManager.getAllPendingRecords(userId);
-    if (pendingRecords.length === 0) return;
+    const pendingItems = await userDBManager.getPendingSyncItems(userId);
+    if (pendingItems.length === 0) return;
 
-    console.log(`📤 Uploading ${pendingRecords.length} pending records...`);
+    console.log(`📤 Uploading ${pendingItems.length} pending records...`);
 
-    // Group by table for batching
-    const tableGroups = pendingRecords.reduce((acc, item) => {
-      if (!acc[item.table]) acc[item.table] = [];
-      acc[item.table].push(item.record);
-      return acc;
-    }, {} as Record<string, any[]>);
-
-    for (const [localTable, records] of Object.entries(tableGroups)) {
-      const remoteTable = this.camelToSnake(localTable);
-      
-      // Convert to remote format (snake_case)
-      const remoteRecords = records.map(r => this.formatForRemote(r, userId));
+    for (const item of pendingItems) {
+      const { table, recordId, operation, data } = item;
+      const remoteTable = this.camelToSnake(table);
+      const remoteData = this.formatForRemote(data, userId);
 
       try {
-        const { error } = await this.supabase!
-          .from(remoteTable)
-          .upsert(remoteRecords, { onConflict: 'id' });
-
-        if (error) throw error;
-
-        // Mark as synced locally
-        for (const record of records) {
-          await userDBManager.setSyncStatus(userId, localTable, record.id, 'synced');
+        if (operation === 'delete') {
+          const { error } = await this.supabase!
+            .from(remoteTable)
+            .delete()
+            .eq('id', recordId);
+          if (error) throw error;
+        } else {
+          const { error } = await this.supabase!
+            .from(remoteTable)
+            .upsert(remoteData, { onConflict: 'id' });
+          if (error) throw error;
         }
-        console.log(`✅ Uploaded ${records.length} records to ${remoteTable}`);
+
+        // Mark as synced
+        await userDBManager.markSynced(userId, item.id);
+        console.log(`✅ Synced ${operation} for ${table}/${recordId}`);
       } catch (error) {
-        console.error(`❌ Failed to upload ${localTable}:`, error);
-        for (const record of records) {
-          await userDBManager.setSyncStatus(userId, localTable, record.id, 'failed');
-        }
+        console.error(`❌ Failed to sync ${table}/${recordId}:`, error);
       }
     }
   }
@@ -324,14 +318,28 @@ class SyncService {
   }
 
   private formatForRemote(record: any, userId: string): any {
-    const formatted: any = {};
-    for (const [key, value] of Object.entries(record)) {
-      if (['syncStatus', 'deviceId'].includes(key)) continue;
-      const remoteKey = key === 'schoolId' ? 'school_id' : this.camelToSnake(key);
-      formatted[remoteKey] = value;
+    const formatted: any = { ...record };
+    // Remove client-only fields
+    delete formatted.syncStatus;
+    delete formatted.deviceId;
+    // Convert field names to snake_case
+    const result: any = {};
+    for (const [key, value] of Object.entries(formatted)) {
+      const snakeKey = key === 'schoolId' ? 'school_id' : this.camelToSnake(key);
+      result[snakeKey] = value;
     }
-    formatted.school_id = userId;
-    return formatted;
+    result.school_id = userId;
+    result.id = record.id;
+    return result;
+  }
+
+  private async mergeRemoteRecords(userId: string, remoteTable: string, remoteRecords: any[]): Promise<void> {
+    const localTable = this.snakeToCamel(remoteTable);
+    for (const record of remoteRecords) {
+      const localRecord = this.formatForLocal(record);
+      localRecord.syncStatus = 'synced';
+      await userDBManager.put(userId, localTable, localRecord);
+    }
   }
 
   private formatForLocal(record: any): any {

@@ -1,5 +1,5 @@
 const DB_NAME_PREFIX = 'schofy_user_db_';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export interface SyncMeta {
   id: string;

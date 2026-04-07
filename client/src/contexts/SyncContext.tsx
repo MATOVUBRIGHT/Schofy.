@@ -73,7 +73,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const pending = await userDBManager.getAllPendingRecords(schoolId);
+      const pending = await userDBManager.getPendingSyncItems(schoolId);
       setPendingChanges(pending.length);
     } catch (error) {
       console.error('Failed to load pending count:', error);
