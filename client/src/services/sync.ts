@@ -11,7 +11,6 @@ class SyncService {
   private syncEnabled = false;
   private isSyncing = false;
   private realtimeChannels: Map<string, RealtimeChannel> = new Map();
-  private lastSyncChanges = 0;
 
   // Only tables that actually exist in Supabase
   private readonly SYNCABLE_TABLES = [
@@ -331,15 +330,6 @@ class SyncService {
     result.school_id = userId;
     result.id = record.id;
     return result;
-  }
-
-  private async mergeRemoteRecords(userId: string, remoteTable: string, remoteRecords: any[]): Promise<void> {
-    const localTable = this.snakeToCamel(remoteTable);
-    for (const record of remoteRecords) {
-      const localRecord = this.formatForLocal(record);
-      localRecord.syncStatus = 'synced';
-      await userDBManager.put(userId, localTable, localRecord);
-    }
   }
 
   private formatForLocal(record: any): any {

@@ -22,13 +22,6 @@ interface SyncContextType {
 
 const SyncContext = createContext<SyncContextType | undefined>(undefined);
 
-const SYNCED_TABLES = [
-  'students', 'staff', 'classes', 'subjects',
-  'attendance', 'fees', 'payments',
-  'announcements', 'exams', 'exam_results',
-  'transport_routes', 'transport_assignments'
-];
-
 export function SyncProvider({ children }: { children: ReactNode }) {
   const { isOnline, user, schoolId } = useAuth();
   const { addToast } = useToast();
@@ -42,7 +35,6 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const [syncEnabled, setSyncEnabled] = useState(
     localStorage.getItem('schofy_sync_enabled') === 'true'
   );
-  const channelRef = useRef<any>(null);
   const lastManualSyncRef = useRef<number>(0);
   const syncInProgressRef = useRef(false);
 
