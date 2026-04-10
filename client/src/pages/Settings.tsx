@@ -395,8 +395,6 @@ export default function Settings() {
                   <button
                     onClick={async () => {
                       const id = user?.id || schoolId;
-                      addToast('Starting push...', 'info');
-                      console.log('Push: id=', id);
                       if (!id) {
                         addToast('No user ID', 'error');
                         return;
@@ -407,56 +405,52 @@ export default function Settings() {
                         let pushedCount = 0;
                         for (const table of tables) {
                           const records = await userDBManager.getAll(id, table);
-                          console.log(`Push: ${table} has ${records.length} locally`);
+                          if (records.length === 0) continue;
+                          
                           for (const record of records) {
-                            if (record.id) {
-                              try {
-                                const payload: any = { id: record.id };
-                                
-                                // Map app fields to Supabase fields
-                                if (record.firstName) payload.first_name = record.firstName;
-                                if (record.lastName) payload.last_name = record.lastName;
-                                if (record.name) payload.name = record.name;
-                                if (record.level) payload.level = record.level;
-                                if (record.admissionNo) payload.admission_no = record.admissionNo;
-                                if (record.gender) payload.gender = record.gender;
-                                if (record.dob) payload.dob = record.dob;
-                                if (record.classId) payload.class_id = record.classId;
-                                if (record.studentId) payload.student_id = record.studentId;
-                                if (record.description) payload.description = record.description;
-                                if (record.amount) payload.amount = record.amount;
-                                if (record.term) payload.term = record.term;
-                                if (record.year) payload.year = record.year;
-                                if (record.method) payload.method = record.method;
-                                if (record.date) payload.date = record.date;
-                                if (record.studentId) payload.student_id = record.studentId;
-                                
-                                payload.school_id = id;
-                                payload.updated_at = record.updatedAt || new Date().toISOString();
-                                if (record.createdAt) payload.created_at = record.createdAt;
-                                
-                                const { error } = await supabase.from(table).insert(payload);
-                                if (error) {
-                                  console.error(`${table} insert error:`, error.message);
-                                } else {
-                                  pushedCount++;
-                                }
-                              } catch (e: any) {
-                                console.warn(`${table} fail:`, e.message || e);
-                              }
+                            if (!record.id) continue;
+                            const payload: any = { id: record.id };
+                            
+                            if (record.firstName) payload.first_name = record.firstName;
+                            if (record.lastName) payload.last_name = record.lastName;
+                            if (record.name) payload.name = record.name;
+                            if (record.level) payload.level = record.level;
+                            if (record.section) payload.section = record.section;
+                            if (record.admissionNo) payload.admission_no = record.admissionNo;
+                            if (record.gender) payload.gender = record.gender;
+                            if (record.dob) payload.dob = record.dob;
+                            if (record.classId) payload.class_id = record.classId;
+                            if (record.studentId) payload.student_id = record.studentId;
+                            if (record.description) payload.description = record.description;
+                            if (record.amount) payload.amount = record.amount;
+                            if (record.term) payload.term = record.term.toString();
+                            if (record.year) payload.year = record.year.toString();
+                            if (record.method) payload.method = record.method;
+                            if (record.date) payload.date = record.date;
+                            if (record.phone) payload.phone = record.phone;
+                            if (record.email) payload.email = record.email;
+                            if (record.address) payload.address = record.address;
+                            if (record.status) payload.status = record.status;
+                            
+                            payload.school_id = id;
+                            payload.updated_at = record.updatedAt || new Date().toISOString();
+                            if (record.createdAt) payload.created_at = record.createdAt;
+                            
+                            const { error } = await supabase.from(table).upsert(payload, { onConflict: 'id' });
+                            if (error && !error.message.includes('duplicate')) {
+                              console.error(`${table} error:`, error.message);
+                            } else {
+                              pushedCount++;
                             }
                           }
                         }
-                        console.log('Total pushed:', pushedCount);
-                        addToast(`Pushed ${pushedCount} records to cloud`, 'success');
+                        addToast(`${pushedCount} records synced to cloud`, 'success');
                       } catch (err: any) {
-                        console.error('Push error:', err);
-                        addToast('Failed: ' + (err.message || err), 'error');
+                        addToast('Sync failed', 'error');
                       }
                     }}
                     disabled={!isOnline || !isSupabaseConfigured}
                     className="btn btn-primary flex items-center gap-2"
-                    title="Push all local data to cloud"
                   >
                     <UploadCloud size={16} />
                     Push to Cloud
