@@ -395,15 +395,21 @@ export default function Settings() {
                   <button
                     onClick={async () => {
                       const id = user?.id || schoolId;
-                      if (!id) return;
+                      addToast('Starting push...', 'info');
+                      console.log('Push: id=', id, 'isSupabaseConfigured=', isSupabaseConfigured);
+                      if (!id) {
+                        addToast('No user ID', 'error');
+                        return;
+                      }
                       try {
                         const { userDBManager } = await import('../lib/database/UserDatabaseManager');
                         const tables = ['classes', 'subjects', 'staff', 'fees', 'payments', 'students', 'attendance', 'announcements'];
                         let pushedCount = 0;
                         for (const table of tables) {
                           const records = await userDBManager.getAll(id, table);
+                          console.log(`Push: ${table} has ${records.length} records`);
                           for (const record of records) {
-                            if (isSupabaseConfigured && supabase && record.id) {
+                            if (record.id) {
                               try {
                                 const payload: any = {
                                   ...record,
@@ -413,18 +419,23 @@ export default function Settings() {
                                 if (record.createdAt) payload.created_at = record.createdAt;
                                 delete payload.syncStatus;
                                 delete payload.deviceId;
-                                await supabase.from(table).upsert(payload, { onConflict: 'id' });
-                                pushedCount++;
+                                const { error } = await supabase.from(table).upsert(payload, { onConflict: 'id' });
+                                if (error) {
+                                  console.error(`Push error ${table}:`, error);
+                                } else {
+                                  pushedCount++;
+                                }
                               } catch (e) {
-                                console.warn(`Failed to push ${table}:`, e);
+                                console.warn(`Push fail ${table}:`, e);
                               }
                             }
                           }
                         }
-                        addToast(`Pushed ${pushedCount} records to cloud`, 'success');
+                        console.log('Total pushed:', pushedCount);
+                        addToast(`Pushed ${pushedCount} records`, 'success');
                       } catch (err) {
                         console.error('Push error:', err);
-                        addToast('Failed to push to cloud', 'error');
+                        addToast('Failed to push: ' + err.message, 'error');
                       }
                     }}
                     disabled={!isOnline || !isSupabaseConfigured}
