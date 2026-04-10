@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { userDBManager } from '../lib/database/UserDatabaseManager';
+import { dataService } from '../lib/database/DataService';
 
 export interface LocalUser {
   id: string;
@@ -134,6 +135,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           } catch (syncError) {
             console.warn('Failed to initialize sync service during session restore:', syncError);
           }
+
+          dataService.startRealtimeSync(userData.schoolId);
           
           console.log('Session restored from cloud');
         }
@@ -223,6 +226,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn('Failed to initialize sync service:', syncError);
       }
 
+      // Start realtime listening for changes from other devices
+      dataService.startRealtimeSync(userData.schoolId);
+
       return { success: true };
     } catch (error: any) {
       console.error('Login error:', error);
@@ -289,7 +295,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       await userDBManager.openDatabase(userData.schoolId);
 
-      // Initialize sync service for this user
+// Initialize sync service for this user
       try {
         const { syncService } = await import('../services/sync');
         if (supabase) {
@@ -297,7 +303,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           syncService.setUserId(userData.id);
           syncService.setSchoolId(userData.schoolId);
           
-          // Enable sync by default for new users
+          // Enable by default for new users
           localStorage.setItem('schofy_sync_enabled', 'true');
           if (navigator.onLine) {
             syncService.enableSync();
@@ -308,7 +314,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn('Failed to initialize sync service:', syncError);
       }
 
-      return { success: true, user: { id: userData.id } };
+      dataService.startRealtimeSync(userData.schoolId);
+
+      return { success: true };
     } catch (error: any) {
       console.error('Registration error:', error);
       return { success: false, error: error.message || 'Registration failed' };

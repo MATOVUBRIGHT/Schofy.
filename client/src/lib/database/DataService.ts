@@ -44,6 +44,10 @@ class DataService {
     this.deviceId = userDBManager.getDeviceId();
   }
 
+  startRealtimeSync(userId: string) {
+    this.subscribeToRemoteChanges(userId).catch(err => console.warn('Realtime sync init failed:', err));
+  }
+
   private isOnline(): boolean {
     return navigator.onLine;
   }
@@ -52,6 +56,65 @@ class DataService {
     // Convert camelCase to snake_case for comparison
     const snakeCase = tableName.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
     return this.SUPABASE_TABLES.has(snakeCase) || this.SUPABASE_TABLES.has(tableName);
+  }
+
+  private subscribedTables = new Set<string>();
+  private subChannel: any = null;
+
+  private async subscribeToRemoteChanges(userId: string) {
+    if (!this.isOnline() || !isSupabaseConfigured || !supabase || this.subChannel) return;
+
+    try {
+      const channel = supabase.channel(`schofy-listen-${userId}`);
+      
+      // Listen to all major tables
+      const tables = ['students', 'classes', 'staff', 'subjects', 'attendance', 'fees', 'payments', 'announcements'];
+      
+      for (const table of tables) {
+        channel.on('postgres_changes', { 
+          event: '*', 
+          schema: 'public', 
+          table,
+          filter: `school_id=eq.${userId}`
+        }, (payload: any) => {
+          this.handleRemoteChange(userId, table, payload);
+        });
+      }
+
+      channel.subscribe((status: string) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('📡 Listening to remote changes');
+          this.subChannel = channel;
+        }
+      });
+    } catch (err) {
+      console.warn('Failed to subscribe to remote changes:', err);
+    }
+  }
+
+  private async handleRemoteChange(userId: string, table: string, payload: any) {
+    const { eventType, new: newRecord, old: oldRecord } = payload;
+    
+    try {
+      if (eventType === 'INSERT' && newRecord) {
+        const localRecord = this.mapSupabaseToLocal(newRecord);
+        localRecord.syncStatus = 'synced';
+        await userDBManager.put(userId, table, localRecord);
+      } else if (eventType === 'UPDATE' && newRecord) {
+        const localRecord = this.mapSupabaseToLocal(newRecord);
+        localRecord.syncStatus = 'synced';
+        await userDBManager.put(userId, table, localRecord);
+      } else if (eventType === 'DELETE' && oldRecord) {
+        await userDBManager.delete(userId, table, oldRecord.id);
+      }
+      
+      // Notify UI
+      window.dispatchEvent(new CustomEvent(`${table}Updated`, { detail: { type: eventType } }));
+      window.dispatchEvent(new CustomEvent('dataRefresh'));
+      console.log(`📡 Remote ${eventType} on ${table}`);
+    } catch (err) {
+      console.error('Failed to handle remote change:', err);
+    }
   }
 
   private broadcastChange(table: string, type: 'INSERT' | 'UPDATE' | 'DELETE', record: any, userId: string) {
