@@ -76,12 +76,6 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     }
   }, [schoolId, syncEnabled]);
 
-  useEffect(() => {
-    loadPendingCount();
-    const interval = setInterval(loadPendingCount, 5000);
-    return () => clearInterval(interval);
-  }, [loadPendingCount]);
-
   const syncNow = useCallback(async (showNotifications = true) => {
     // Prevent multiple concurrent syncs
     if (syncInProgressRef.current || !isOnline || !syncEnabled || !schoolId) {
@@ -141,14 +135,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
       localStorage.removeItem(`last_sync_${schoolId}`);
       await syncService.runFullSyncCycle();
       setLastSyncTime(new Date());
-      await loadPendingCount();
       addToast('✅ Full sync completed', 'success');
+      window.dispatchEvent(new CustomEvent('dataRefresh'));
     } catch (error) {
       addToast('Full sync failed', 'error');
     } finally {
       setIsSyncing(false);
     }
-  }, [schoolId, addToast, loadPendingCount]);
+  }, [schoolId, addToast]);
 
   const exportBackup = useCallback(async () => {
     if (!user?.id) return;
