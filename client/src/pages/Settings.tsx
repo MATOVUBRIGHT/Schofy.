@@ -394,21 +394,30 @@ export default function Settings() {
                   </button>
                   <button
                     onClick={async () => {
-                      if (!schoolId) return;
+                      const id = user?.id || schoolId;
+                      if (!id) return;
                       try {
                         const { userDBManager } = await import('../lib/database/UserDatabaseManager');
-                        const tables = ['classes', 'subjects', 'staff', 'fees', 'payments'];
+                        const tables = ['classes', 'subjects', 'staff', 'fees', 'payments', 'students', 'attendance', 'announcements'];
                         let pushedCount = 0;
                         for (const table of tables) {
-                          const records = await userDBManager.getAll(schoolId, table);
+                          const records = await userDBManager.getAll(id, table);
                           for (const record of records) {
-                            if (isSupabaseConfigured && supabase) {
-                              await supabase.from(table).upsert({
-                                ...record,
-                                school_id: schoolId,
-                                updated_at: new Date().toISOString(),
-                              }, { onConflict: 'id' });
-                              pushedCount++;
+                            if (isSupabaseConfigured && supabase && record.id) {
+                              try {
+                                const payload: any = {
+                                  ...record,
+                                  school_id: id,
+                                  updated_at: record.updatedAt || new Date().toISOString(),
+                                };
+                                if (record.createdAt) payload.created_at = record.createdAt;
+                                delete payload.syncStatus;
+                                delete payload.deviceId;
+                                await supabase.from(table).upsert(payload, { onConflict: 'id' });
+                                pushedCount++;
+                              } catch (e) {
+                                console.warn(`Failed to push ${table}:`, e);
+                              }
                             }
                           }
                         }
