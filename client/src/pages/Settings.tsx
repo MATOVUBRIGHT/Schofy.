@@ -5,8 +5,9 @@ import { useToast } from '../contexts/ToastContext';
 import { useCurrency } from '../hooks/useCurrency';
 import { useSync } from '../contexts/SyncContext';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { dataService } from '../lib/database/DataService';
+import { userDBManager } from '../lib/database/UserDatabaseManager';
 
 const currencies = [
   { code: 'USD', symbol: '$', name: 'US Dollar' },
@@ -69,10 +70,22 @@ export default function Settings() {
     if (!id) return;
     try {
       for (const [key, value] of Object.entries(settings)) {
-        await dataService.update(id, 'settings', key, { value } as any);
+        const settingRecord = { id: key, key, value, updatedAt: new Date().toISOString() };
+        
+        // Cloud-first: save to Supabase when online
+        if (isSupabaseConfigured && supabase) {
+          try {
+            await supabase.from('settings').upsert({ ...settingRecord, school_id: id }, { onConflict: 'id' });
+          } catch (e) { console.warn('Cloud save failed:', e); }
+        }
+        // Also save locally
+        await userDBManager.put(id, 'settings', settingRecord);
       }
+      // Broadcast settings update to all pages
+      window.dispatchEvent(new CustomEvent('settingsUpdated', { detail: settings }));
       addToast('Settings saved', 'success');
     } catch (error) {
+      console.error('Save settings error:', error);
       addToast('Failed to save settings', 'error');
     }
   }

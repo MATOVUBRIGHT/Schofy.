@@ -30,13 +30,22 @@ export function useCurrency() {
         setCurrencyState(currencies[stored as CurrencyCode]);
       }
     };
+
+    const handleSettingsUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail?.currency && currencies[customEvent.detail.currency as CurrencyCode]) {
+        setCurrencyState(currencies[customEvent.detail.currency as CurrencyCode]);
+      }
+    };
     
     window.addEventListener('storage', handleStorageChange);
     window.addEventListener('currencyChanged', handleStorageChange);
+    window.addEventListener('settingsUpdated', handleSettingsUpdate);
     
     return () => {
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('currencyChanged', handleStorageChange);
+      window.removeEventListener('settingsUpdated', handleSettingsUpdate);
     };
   }, []);
 
