@@ -27,12 +27,20 @@ async function main() {
   console.log('[vercel-build] Root directory:', root);
   console.log('[vercel-build] Node version:', process.version);
   
-  const clientDist = path.join(root, 'client', 'dist');
+  const clientDir = path.join(root, 'client');
+  const clientDist = path.join(clientDir, 'dist');
   const outputDist = path.join(root, 'public');
 
   console.log('[vercel-build] Building client workspace...');
-  // Use 'npm' directly on Linux, it's usually in the PATH
-  await run('npm', ['run', 'build', '--workspace=client']);
+  // Change directory to client and run build there to avoid workspace issues
+  process.chdir(clientDir);
+  console.log('[vercel-build] Changed directory to:', process.cwd());
+  
+  await run('npm', ['install']);
+  await run('npm', ['run', 'build']);
+  
+  process.chdir(root);
+  console.log('[vercel-build] Returned to root directory:', process.cwd());
 
   try {
     await access(clientDist, constants.F_OK);
@@ -42,9 +50,9 @@ async function main() {
     // List files to help debugging
     try {
       if (process.platform === 'win32') {
-        await run('cmd.exe', ['/d', '/s', '/c', 'dir /s /b client']);
+        await run('cmd.exe', ['/d', '/s', '/c', 'dir /s /b']);
       } else {
-        await run('ls', ['-R', 'client']);
+        await run('ls', ['-R']);
       }
     } catch (lsError) {
       console.error('[vercel-build] Failed to list files:', lsError.message);
