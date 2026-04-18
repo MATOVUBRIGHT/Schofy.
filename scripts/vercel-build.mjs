@@ -20,7 +20,7 @@ function run(command, args) {
 async function main() {
   const root = process.cwd();
   const clientDist = path.join(root, 'client', 'dist');
-  const outputDist = path.join(root, 'dist');
+  const outputDist = path.join(root, 'public');
 
   console.log('[vercel-build] Building client workspace...');
   if (process.platform === 'win32') {
@@ -29,9 +29,20 @@ async function main() {
     await run('npm', ['run', 'build', '--workspace=client']);
   }
 
-  await access(clientDist, constants.F_OK);
+  try {
+    await access(clientDist, constants.F_OK);
+  } catch (e) {
+    console.error(`[vercel-build] Error: ${clientDist} does not exist after build!`);
+    // List files to help debugging
+    if (process.platform === 'win32') {
+      await run('cmd.exe', ['/d', '/s', '/c', 'dir /s /b client\\dist']);
+    } else {
+      await run('ls', ['-R', 'client/dist']);
+    }
+    throw e;
+  }
 
-  console.log('[vercel-build] Preparing root dist output...');
+  console.log('[vercel-build] Preparing root public output...');
   await rm(outputDist, { recursive: true, force: true });
   await cp(clientDist, outputDist, { recursive: true });
 

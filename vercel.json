@@ -1,6 +1,6 @@
 {
-  "buildCommand": "npm run build --workspace=client",
-  "outputDirectory": "client/dist",
+  "buildCommand": "node scripts/vercel-build.mjs",
+  "outputDirectory": "public",
   "installCommand": "npm install",
   "framework": null,
   "env": {
